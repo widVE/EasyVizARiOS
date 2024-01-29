@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 848409ee8ba454f42a5ddff137688a27, type: 3}
+  m_Name: ReferenceImageLibrary
+  m_EditorClassIdentifier: 
+  m_GuidLow: 5479223515852023638
+  m_GuidHigh: 12584174940596281991
+  m_DataStore:
+    m_Storage: []
+  m_Images:
+  - m_SerializedGuid:
+      m_GuidLow: 4612232080507426439
+      m_GuidHigh: 17229451736465561533
+    m_SerializedTextureGuid:
+      m_GuidLow: 1501159353753529284
+      m_GuidHigh: 6204559392913503417
+    m_Size: {x: 0.127, y: 0.1276562}
+    m_SpecifySize: 1
+    m_Name: BestQR2
+    m_Texture: {fileID: 2800000, guid: 8fbbebc4307a14d5b9346c0ae5051b56, type: 3}
+  - m_SerializedGuid:
+      m_GuidLow: 5189938334082487077
+      m_GuidHigh: 5561038569918422927
+    m_SerializedTextureGuid:
+      m_GuidLow: 15301857073113969421
+      m_GuidHigh: 71662866260424376
+    m_Size: {x: 0.127, y: 0.12628944}
+    m_SpecifySize: 1
+    m_Name: BestQR
+    m_Texture: {fileID: 2800000, guid: 6ec1b30d1defd45bb8f60947ff98fe00, type: 3}
