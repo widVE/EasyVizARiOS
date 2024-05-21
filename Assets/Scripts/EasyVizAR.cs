@@ -6,7 +6,6 @@ using UnityEngine.Networking;
 using System;
 using System.Runtime.InteropServices;
 using System.IO;
-using EasyVizAR;
 
 namespace EasyVizAR
 {
@@ -107,7 +106,7 @@ namespace EasyVizAR
 		public int width;
 		public int height;
 
-		public string created_by;
+		//public string created_by;
 		public string camera_location_id;
 		public Position camera_position;
 		public Orientation camera_orientation;
@@ -245,6 +244,97 @@ namespace EasyVizAR
 		public string model_url;
 		public HeadsetConfiguration headset_configuration;
     }
+
+	[System.Serializable]
+	public class PhotoFileInfo
+	{
+		public string content_type;
+		public int height;
+		public string name;
+		public string purpose;
+		public int width;
+	}
+
+	[System.Serializable]
+	public class AnnotationBox
+	{
+		public float height;
+		public float left;
+		public float top;
+		public float width;
+	}
+
+	[System.Serializable]
+	public class PhotoFileAnnotation
+	{
+		public AnnotationBox boundary;
+		public float confidence;
+		public int id;
+		public string identified_user_id;
+		public string label;
+		public int photo_record_id;
+		public string sublabel;
+	}
+	
+	[System.Serializable]
+	public class PhotoUpdated
+	{
+		public string queue_name;
+		public int id;
+		public string retention;
+		public int priority;
+		public string created_by;
+		public int device_pose_id;
+		public string camera_location_id;
+		public float created;
+		public PhotoFileAnnotation[] annotations;
+		public int tracking_session_id;
+		public PhotoFileInfo[] files;
+		public float updated;
+		public string imageUrl;
+		public bool ready;
+		public string status;
+		public Position camera_position;
+		public Orientation camera_orientation;
+	}
+	
+	[System.Serializable]
+	public class PhotoUpdatedEvent
+	{
+		public PhotoUpdated current;
+		public PhotoUpdated previous;
+	}
+
+	[System.Serializable]
+	public class PhotoReturn
+	{
+		public PhotoFileAnnotation[] annotations;
+		public string camera_location_id;
+		public Position camera_position;
+		public Orientation camera_orientation;
+		
+		public string created;
+		public string created_by;
+		public int device_pose_id;
+
+		public PhotoFileInfo[] files;
+
+		public int id;
+		public string imageUrl;
+
+		public int priority;
+		public string queue_name;
+		public bool ready;
+		public string retention;
+		public string status;
+		public float updated;
+	}
+
+	[System.Serializable]
+	public class PhotoListReturn
+	{
+		public PhotoReturn[] photos;
+	}
 }
 
 public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
@@ -257,10 +347,14 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 	public const string JSON_TYPE = "application/json";
 	public const string JPEG_TYPE = "image/jpeg";
 	public const string PNG_TYPE = "image/png";
+	public const string BMP_TYPE = "image/bmp";
 
     public bool verbose_debug = false;
 
     bool _isUploadingImage = false;
+	
+	
+	public bool IsUploadingImage() { return _isUploadingImage; }
 	
 	void Start()
     {
@@ -285,15 +379,10 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
     {
 		if (Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
 		{
-			Debug.Log("URL: " + url);
 			_authority = uri.Authority;
 			_baseURL = url;
 
 			_hasRegistration = TryLoadRegistration(out _registration);
-		}
-		else
-		{
-			Debug.Log("URL CREATION FAILED");
 		}
 	}
 
@@ -333,9 +422,9 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		StartCoroutine(DoDELETE(_baseURL + url, contentType, jsonData, callBack));
 	}
 
-	public void Texture(string url, string contentType, string width, System.Action<Texture> callBack)
+	public void Texture(string url, string contentType, string width, System.Action<Texture2D> callBack, TextureFormat format = TextureFormat.RGBA32)
 	{
-		StartCoroutine(GetTexture(_baseURL+url, contentType, width, callBack));
+		StartCoroutine(GetTexture(_baseURL+url, contentType, width, callBack, format));
 	}
 
     public void TextureMapID(string url, string contentType, string width, int map_ID, System.Action<Texture,int> callBack)
@@ -388,34 +477,38 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 	}
 	
 	public bool PutImageTriple(string contentType, string pathToFile, string pathToFile2, string pathToFile3, string locationID, int width, int height, System.Action<string> callBack, 
-				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="photo", string imageType2="depth", string imageType3="geometry")
+				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="geometry", string imageType2="photo", string imageType3="depth", string prefix="")
 	{
-		if(!_isUploadingImage)
-		{
+		//if(!_isUploadingImage)
+		//{
 			_isUploadingImage = true;
-			StartCoroutine(UploadImageTriple(contentType, pathToFile, pathToFile2, pathToFile3, locationID, width, height, callBack, position, orientation, headsetID, imageType, imageType2, imageType3));
-			return true;
-		}
+			StartCoroutine(UploadImageTriple(contentType, pathToFile, pathToFile2, pathToFile3, locationID, width, height, callBack, position, orientation, headsetID, imageType, imageType2, imageType3, prefix));
+			//return true;
+		//}
 		
-		return false;
+		return true;
 	}
 	
 	public bool PutImageQuad(string contentType, string pathToFile, string pathToFile2, string pathToFile3, string pathToFile4, string locationID, int width, int height, System.Action<string> callBack, 
-				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="photo", string imageType2="depth", string imageType3="geometry", string imageType4="thermal", int colorWidth=0, int colorHeight=0)
+				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="photo", string imageType2="depth", string imageType3="geometry", string imageType4="thermal", string prefix="",
+				int colorWidth=0, int colorHeight=0)
 	{
-		if(!_isUploadingImage)
-		{
+		//if(!_isUploadingImage)
+		//{
 			_isUploadingImage = true;
-			StartCoroutine(UploadImageQuad(contentType, pathToFile, pathToFile2, pathToFile3, pathToFile4, locationID, width, height, callBack, position, orientation, headsetID, imageType, imageType2, imageType3, imageType4));
-			return true;
-		}
+			StartCoroutine(UploadImageQuad(contentType, pathToFile, pathToFile2, pathToFile3, pathToFile4, locationID, width, height, callBack, position, orientation, headsetID, imageType, imageType2, imageType3, imageType4, prefix, colorWidth, colorHeight));
+		//	return true;
+		//}
 		
-		return false;
+		return true;
 	}
 	
 	
 	IEnumerator DoGET(string url, string contentType, System.Action<string> callBack)
 	{
+		//Debug.Log(url);
+		//Debug.Log(contentType);
+		
 		UnityWebRequest www = UnityWebRequest.Get(url);
 
 		www.SetRequestHeader("Content-Type", contentType);
@@ -431,8 +524,8 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		string result = "";
 		if (www.result != UnityWebRequest.Result.Success)
 		{
-			result = "error";
-			//Debug.Log(www.error);
+			result = www.error;
+            Debug.Log(www.error);
 		}
 		else
 		{
@@ -463,8 +556,8 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		string result = "";
         if (www.result != UnityWebRequest.Result.Success)
         {
-			result = "error";
-            //Debug.Log(www.error);
+			result = www.error;
+            Debug.Log(www.error);
         }
         else
         {
@@ -606,12 +699,17 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
         }
     }
 
-    IEnumerator GetTexture(string url, string contentType, string width, System.Action<Texture> callBack)
+    IEnumerator GetTexture(string url, string contentType, string width, System.Action<Texture2D> callBack, TextureFormat format = TextureFormat.RGBA32)
 	{
-		UnityWebRequest www = UnityWebRequestTexture.GetTexture(url);
+		//UnityWebRequest www = UnityWebRequestTexture.GetTexture(url);
+		//Debug.Log(url);
+		UnityWebRequest www = new UnityWebRequest(url);
+		www.downloadHandler = new DownloadHandlerBuffer();
 
-		www.SetRequestHeader("Accept", contentType);
-		www.SetRequestHeader("Width", width);
+		//www.SetRequestHeader("Accept", contentType);
+		//www.SetRequestHeader("Width", width);
+		//www.SetRequestHeader("Content-Type", "image/png");
+
 		if (_hasRegistration)
 		{
 			www.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
@@ -628,12 +726,88 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		}
 		else
 		{
-			
+			//Debug.Log(format);
 			//Using the Texture download handler we get the content from the Unity Web Request object
-			Texture my_text = DownloadHandlerTexture.GetContent(www);
-			callBack(my_text);
-			
-			//www.Dispose();
+			//Texture tex = DownloadHandlerTexture.GetContent(www);
+			if(www.downloadHandler.isDone)
+			{
+				//Debug.Log(((Texture2D)tex).format);
+				Texture2D newTex = new Texture2D(320, 288, TextureFormat.RGBA32, false);
+				//Debug.Log(newTex.format);
+				//Debug.Log(www.downloadHandler.data.Length);
+				if(contentType == "image/png")
+				{
+					newTex.LoadImage(www.downloadHandler.data);
+				}
+				else
+				{
+					int texSize = 320 * 288 * 4;
+					byte[] texData = new byte[texSize];
+					const int HEADER_SIZE = 54;
+					int byteCount = 0;
+					ushort magicNumber = 0;
+					uint fileSize = 0;
+					uint bpp = 0;
+					uint reserved1 = 0;
+					uint reserved2 = 0;
+					uint offset = 0;
+					uint dibSize = 0;
+					uint compressionType = 0;
+					uint imageSize = 0;
+					uint imageWidth = 0;
+					uint imageHeight = 0;
+
+					byte[] headerData = new byte[HEADER_SIZE];
+					byte[] downloadData = www.downloadHandler.data;
+
+					for(int i = 0; i < HEADER_SIZE; ++i)
+					{
+						headerData[i] = downloadData[i];
+					}
+
+					for(int i = 0; i < texSize; ++i)
+					{
+						texData[i] = downloadData[HEADER_SIZE+i];
+						//Debug.Log(texData[i]);
+					}
+
+					/*fileSize = (uint)headerData[2] | (uint)(headerData[3] << 8) | (uint)(headerData[4] << 16) | (uint)(headerData[5] << 24);
+					reserved1 = (uint)headerData[6] | (uint)(headerData[7] << 8);
+					reserved2 = (uint)headerData[8] | (uint)(headerData[9] << 8);
+					offset = (uint)headerData[10] | (uint)(headerData[11] << 8) | (uint)(headerData[12] << 16) | (uint)(headerData[13] << 24);
+					dibSize = (uint)headerData[14] | (uint)(headerData[15] << 8) | (uint)(headerData[16] << 16) | (uint)(headerData[17] << 24);
+					imageWidth = (uint)headerData[18] | (uint)(headerData[19] << 8) | (uint)(headerData[20] << 16) | (uint)(headerData[21] << 24);
+					imageHeight = (uint)headerData[22] | (uint)(headerData[23] << 8) | (uint)(headerData[24] << 16) | (uint)(headerData[25] << 24);
+
+					bpp = (uint)headerData[28] | (uint)(headerData[29] << 8);
+					compressionType = (uint)headerData[30] | (uint)(headerData[31] << 8) | (uint)(headerData[32] << 16) | (uint)(headerData[33] << 24);
+					imageSize = (uint)headerData[34] | (uint)(headerData[35] << 8) | (uint)(headerData[36] << 16) | (uint)(headerData[37] << 24);
+
+					Debug.Log("FILE SIZE: " + fileSize);
+					Debug.Log("Image Width: " + imageWidth);
+					Debug.Log("Image Height: " + imageHeight);
+					
+					Debug.Log("BPP: " + bpp);
+					Debug.Log("Compression: " + compressionType);
+					Debug.Log("Image Size: " + imageSize);
+					Debug.Log("Offset: " + offset);
+					Debug.Log("DIB Size: " + dibSize);*/
+
+					/*uint rTest = (uint)texData[0] | (uint)(texData[1] << 8);
+					uint gTest = (uint)texData[2] | (uint)(texData[3] << 8);
+					uint bTest = (uint)texData[4] | (uint)(texData[5] << 8);
+					uint aTest = (uint)texData[6] | (uint)(texData[7] << 8);
+					Debug.Log(texData[6]);
+					Debug.Log(texData[7]);
+					Debug.Log("Color Test: " + rTest + " " + gTest + " " + bTest + " " + aTest);*/
+
+					newTex.LoadRawTextureData(texData);
+				}
+				
+				callBack(newTex);
+				
+				www.Dispose();
+			}
 			
 			//Map_lines is a list of different map display layers. The texture is assigned to the lines layer
 			//of the map_layout instances. Those objects can modify the display of color and other properties of the lines
@@ -669,7 +843,7 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 			//var hsObject = headset.GetComponent<EasyVizARHeadset>();
 			//if (hsObject != null)
             {
-				h.created_by = headsetID;//hsObject._headsetID;
+				//h.created_by = headsetID;//hsObject._headsetID;
 			}
 
 			h.camera_position = new EasyVizAR.Position();
@@ -687,7 +861,12 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 
 		UnityWebRequest www = new UnityWebRequest(GetBaseURL() + "/photos", "POST");
 		www.SetRequestHeader("Content-Type", "application/json");
-
+		
+		if (_hasRegistration)
+		{
+			www.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		string ourJson = JsonUtility.ToJson(h);
 
 		byte[] json_as_bytes = new System.Text.UTF8Encoding().GetBytes(ourJson);
@@ -724,11 +903,16 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		//instead let's add "photo.png" or "depth.png" to the end of the image URL...
 		string iUrl = h2.imageUrl;
 		iUrl = iUrl.Replace("image", imageType);
-		iUrl = iUrl + ".png";
+		iUrl = iUrl + ".bmp";
 
 		UnityWebRequest www2 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
-		www2.SetRequestHeader("Content-Type", "image/png");
+		www2.SetRequestHeader("Content-Type", "image/bmp");
 
+		if (_hasRegistration)
+		{
+			www2.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www2.uploadHandler = new UploadHandlerFile(path);//new UploadHandlerRaw(image_as_bytes2);//
@@ -754,6 +938,11 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		UnityWebRequest www3 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
 		www3.SetRequestHeader("Content-Type", "image/png");
 
+		if (_hasRegistration)
+		{
+			www3.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www3.uploadHandler = new UploadHandlerFile(path2);//new UploadHandlerRaw(image_as_bytes2);//
@@ -778,13 +967,13 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		
 		_isUploadingImage = false;
 
-		File.Delete(path);
-		File.Delete(path2);
+		//File.Delete(path);
+		//File.Delete(path2);
 	}
 
 
 	IEnumerator UploadImageTriple(string contentType, string path, string path2, string path3, string locationID, int width, int height, System.Action<string> callBack,
-				Vector3 position, Quaternion orientation, string headsetID = "", string imageType = "photo", string imageType2 = "depth", string imageType3 = "geometry")
+				Vector3 position, Quaternion orientation, string headsetID = "", string imageType = "geometry", string imageType2 = "photo", string imageType3 = "depth", string prefix="")
 	{
 		EasyVizAR.Hololens2PhotoPost h = new EasyVizAR.Hololens2PhotoPost();
 		h.width = width;
@@ -792,13 +981,16 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		h.contentType = contentType;//"image/png";
 		h.camera_location_id = locationID;
 
+		string return1 = prefix+"_1.txt";
+		
+		
 		//var headset = headsetManager.LocalHeadset;
 		//if (headset != null)
 		{
 			//var hsObject = headset.GetComponent<EasyVizARHeadset>();
 			//if (hsObject != null)
 			{
-				h.created_by = headsetID;//hsObject._headsetID;
+				//h.created_by = headsetID;//hsObject._headsetID;
 			}
 
 			h.camera_position = new EasyVizAR.Position();
@@ -816,7 +1008,12 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 
 		UnityWebRequest www = new UnityWebRequest(GetBaseURL() + "/photos", "POST");
 		www.SetRequestHeader("Content-Type", "application/json");
-
+		
+		if (_hasRegistration)
+		{
+			www.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		string ourJson = JsonUtility.ToJson(h);
 
 		byte[] json_as_bytes = new System.Text.UTF8Encoding().GetBytes(ourJson);
@@ -828,19 +1025,19 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		if (www.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr1.txt"), www.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return1), www.error);
 		}
 		else
 		{
 			//Debug.Log("Form upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut1.txt"), "successfully posted photo");
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return1), "successfully posted photo");
 		}
 
 		string resultText = www.downloadHandler.text;
 
-		System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "path.txt"), path);
+		//System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "path.txt"), path);
 
-		System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "result.txt"), resultText);
+		//System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "result.txt"), resultText);
 		//Debug.Log(resultText);
 
 		EasyVizAR.Hololens2PhotoPut h2 = JsonUtility.FromJson<EasyVizAR.Hololens2PhotoPut>(resultText);
@@ -849,31 +1046,38 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		//string photoJson = JsonUtility.ToJson(h2);
 		//Debug.Log(photoJson);
 		//Debug.Log(h2.imageUrl);
-
+		string return2 = prefix+"_2.txt";
+		
+		
 		//instead let's add "photo.png" or "depth.png" to the end of the image URL...
 		string iUrl = h2.imageUrl;
 		iUrl = iUrl.Replace("image", imageType);
-		iUrl = iUrl + ".png";
+		iUrl = iUrl + ".bmp";
 
 		UnityWebRequest www2 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
-		www2.SetRequestHeader("Content-Type", "image/png");
+		www2.SetRequestHeader("Content-Type", "image/bmp");
 
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www2.uploadHandler = new UploadHandlerFile(path);//new UploadHandlerRaw(image_as_bytes2);//
 		www2.downloadHandler = new DownloadHandlerBuffer();
-
+		
+		if (_hasRegistration)
+		{
+			www2.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www2.SendWebRequest();
 
 		if (www2.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr2.txt"), www2.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return2), www2.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut2.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return2), iUrl);
 		}
 
 		iUrl = h2.imageUrl;
@@ -883,6 +1087,12 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		UnityWebRequest www3 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
 		www3.SetRequestHeader("Content-Type", "image/png");
 
+		if (_hasRegistration)
+		{
+			www3.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
+		string return3 = prefix+"_3.txt";
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www3.uploadHandler = new UploadHandlerFile(path2);//new UploadHandlerRaw(image_as_bytes2);//
@@ -893,37 +1103,43 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		if (www3.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr3.txt"), www3.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return3), www3.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut3.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return3), iUrl);
 		}
 
 		iUrl = h2.imageUrl;
 		iUrl = iUrl.Replace("image", imageType3);
-		iUrl = iUrl + ".png";
+		iUrl = iUrl + ".bmp";
 
 		UnityWebRequest www4 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
-		www4.SetRequestHeader("Content-Type", "image/png");
-
+		www4.SetRequestHeader("Content-Type", "image/bmp");
+		
+		string return4 = prefix+"_4.txt";
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www4.uploadHandler = new UploadHandlerFile(path3);//new UploadHandlerRaw(image_as_bytes2);//
 		www4.downloadHandler = new DownloadHandlerBuffer();
-
+		
+		if (_hasRegistration)
+		{
+			www4.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www4.SendWebRequest();
 
 		if (www4.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr4.txt"), www4.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return4), www4.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut3.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return4), iUrl);
 		}
 
 		www.Dispose();
@@ -931,30 +1147,33 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		www3.Dispose();
 		www4.Dispose();
 
-		File.Delete(path);
-		File.Delete(path2);
-		File.Delete(path3);
+		//File.Delete(path);
+		//File.Delete(path2);
+		//File.Delete(path3);
 
 		_isUploadingImage = false;
 	}
 	
 	
 	IEnumerator UploadImageQuad(string contentType, string path, string path2, string path3, string path4, string locationID, int width, int height, System.Action<string> callBack, 
-				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="photo", string imageType2="depth", string imageType3="geometry", string imageType4="thermal", int colorWidth=0, int colorHeight=0)
+				Vector3 position, Quaternion orientation, string headsetID = "", string imageType="photo", string imageType2="depth", string imageType3="geometry", string imageType4="thermal", 
+				string prefix="", int colorWidth=0, int colorHeight=0)
     {
 		EasyVizAR.Hololens2PhotoPost h = new EasyVizAR.Hololens2PhotoPost();
 		h.width = width;
 		h.height = height;
 		h.contentType = contentType;//"image/png";
 		h.camera_location_id = locationID;
-
+		
+		string return1 = prefix+"_1.txt";
+		
 		//var headset = headsetManager.LocalHeadset;
 		//if (headset != null)
         {
 			//var hsObject = headset.GetComponent<EasyVizARHeadset>();
 			//if (hsObject != null)
             {
-				h.created_by = headsetID;//hsObject._headsetID;
+				//h.created_by = headsetID;//hsObject._headsetID;
 			}
 
 			h.camera_position = new EasyVizAR.Position();
@@ -978,18 +1197,22 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		byte[] json_as_bytes = new System.Text.UTF8Encoding().GetBytes(ourJson);
 		www.uploadHandler = new UploadHandlerRaw(json_as_bytes);
 		www.downloadHandler = new DownloadHandlerBuffer();
-
+		if (_hasRegistration)
+		{
+			www.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www.SendWebRequest();
 
 		if (www.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr1.txt"), www.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return1), www.error);
 		}
 		else
 		{
 			//Debug.Log("Form upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut1.txt"), "successfully posted photo");
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return1), "successfully posted photo");
 		}
 
 		string resultText = www.downloadHandler.text;
@@ -1009,27 +1232,33 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		//instead let's add "photo.png" or "depth.png" to the end of the image URL...
 		string iUrl = h2.imageUrl;
 		iUrl = iUrl.Replace("image", imageType);
-		iUrl = iUrl + ".png";
+		iUrl = iUrl + ".bmp";
 
 		UnityWebRequest www2 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
-		www2.SetRequestHeader("Content-Type", "image/png");
-
+		www2.SetRequestHeader("Content-Type", "image/bmp");
+		if (_hasRegistration)
+		{
+			www2.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www2.uploadHandler = new UploadHandlerFile(path);//new UploadHandlerRaw(image_as_bytes2);//
 		www2.downloadHandler = new DownloadHandlerBuffer();
 
 		yield return www2.SendWebRequest();
-
+		
+		string return2 = prefix+"_2.txt";
+		
 		if (www2.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr2.txt"), www2.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return2), www2.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut2.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return2), iUrl);
 		}
 
 		iUrl = h2.imageUrl;
@@ -1043,43 +1272,53 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www3.uploadHandler = new UploadHandlerFile(path2);//new UploadHandlerRaw(image_as_bytes2);//
 		www3.downloadHandler = new DownloadHandlerBuffer();
-
+		if (_hasRegistration)
+		{
+			www3.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www3.SendWebRequest();
-
+		
+		string return3 = prefix+"_3.txt";
 		if (www3.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr3.txt"), www3.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return3), www3.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut3.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return3), iUrl);
 		}
 		
 		iUrl = h2.imageUrl;
 		iUrl = iUrl.Replace("image", imageType3);
-		iUrl = iUrl + ".png";
+		iUrl = iUrl + ".bmp";
 		
 		UnityWebRequest www4 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
-		www4.SetRequestHeader("Content-Type", "image/png");
+		www4.SetRequestHeader("Content-Type", "image/bmp");
 
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www4.uploadHandler = new UploadHandlerFile(path3);//new UploadHandlerRaw(image_as_bytes2);//
 		www4.downloadHandler = new DownloadHandlerBuffer();
-
+		if (_hasRegistration)
+		{
+			www4.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www4.SendWebRequest();
 
+		string return4 = prefix+"_4.txt";
 		if (www4.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr4.txt"), www4.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return4), www4.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut3.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return4), iUrl);
 		}
 		
 		iUrl = h2.imageUrl;
@@ -1088,23 +1327,29 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		
 		UnityWebRequest www5 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
 		www5.SetRequestHeader("Content-Type", "image/png");
-
+	
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www5.uploadHandler = new UploadHandlerFile(path4);//new UploadHandlerRaw(image_as_bytes2);//
 		www5.downloadHandler = new DownloadHandlerBuffer();
-
+		if (_hasRegistration)
+		{
+			www5.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		yield return www5.SendWebRequest();
-
+		
+		string return5 = prefix+"_5.txt";
+		
 		if (www5.result != UnityWebRequest.Result.Success)
 		{
 			//Debug.Log(www2.error);
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOutErr4.txt"), www4.error);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return5), www4.error);
 		}
 		else
 		{
 			//Debug.Log("Photo upload complete!");
-			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, "logOut3.txt"), iUrl);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, return5), iUrl);
 		}
 		
 		www.Dispose();
@@ -1113,10 +1358,10 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 		www4.Dispose();
 		www5.Dispose();
 
-		File.Delete(path);
-		File.Delete(path2);
-		File.Delete(path3);
-		File.Delete(path4);
+		//File.Delete(path);
+		//File.Delete(path2);
+		//File.Delete(path3);
+		//File.Delete(path4);
 
 		_isUploadingImage = false;
 	}
@@ -1136,7 +1381,7 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 			//var hsObject = headset.GetComponent<EasyVizARHeadset>();
 			//if (hsObject != null)
             {
-				h.created_by = headsetID;//hsObject._headsetID;
+				//h.created_by = headsetID;//hsObject._headsetID;
 			}
 
 			h.camera_position = new EasyVizAR.Position();
@@ -1154,7 +1399,11 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 
 		UnityWebRequest www = new UnityWebRequest(GetBaseURL() + "/photos", "POST");
 		www.SetRequestHeader("Content-Type", "application/json");
-
+		if (_hasRegistration)
+		{
+			www.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		string ourJson = JsonUtility.ToJson(h);
 
 		byte[] json_as_bytes = new System.Text.UTF8Encoding().GetBytes(ourJson);
@@ -1195,7 +1444,11 @@ public class EasyVizARServer : SingletonWIDVE<EasyVizARServer>
 
 		UnityWebRequest www2 = new UnityWebRequest(GetBaseURL() + iUrl, "PUT");
 		www2.SetRequestHeader("Content-Type", "image/png");
-
+		if (_hasRegistration)
+		{
+			www2.SetRequestHeader("Authorization", "Bearer " + _registration.auth_token);
+		}
+		
 		//byte[] image_as_bytes2 = imageData.GetRawTextureData();//new System.Text.UTF8Encoding().GetBytes(photoJson);
 		//for sending an image - above raw data technique didn't work, but sending via uploadhandlerfile below did...
 		www2.uploadHandler = new UploadHandlerFile(path);//new UploadHandlerRaw(image_as_bytes2);//

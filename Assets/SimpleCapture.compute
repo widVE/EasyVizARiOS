@@ -1,0 +1,103 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSClearTexture
+#pragma kernel CSClearBuffer
+#pragma kernel CSDepthRange
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+#define USE_LINEAR_FLOATS
+#define USE_SINGLE_RGB_BUFFER
+#define USE_RGBD_BUFFER
+#define SINGLE_POINTS
+
+RWStructuredBuffer<uint> renderBuffer;
+
+RWTexture2D<float4> renderTexture;
+RWTexture2D<float4> normalsTexture;
+RWTexture2D<float4> normalVectorTexture;
+RWTexture2D<float4> normalDiffTexture;
+RWTexture2D<float4> geometryTexture;
+RWTexture2D<float4> laplacianTexture;
+
+StructuredBuffer<float> gaussianCoeffs;
+
+Texture2D<float4> colorTexture;
+Texture2D<float> depthTexture;
+Texture2D<float> confTexture;
+
+SamplerState samplerconfTexture;
+RWStructuredBuffer<int> rangeBuf;
+
+uniform float4x4 camIntrinsicsInverse;
+uniform float4x4 localToWorld;
+uniform float4x4 viewProjMatrix;
+uniform float4x4 displayMatrix;
+
+uniform float depthWidth;
+uniform float depthHeight;
+uniform uint screenWidth;
+uniform uint screenHeight;
+
+uniform int orientation;
+uniform uint depthResolution;
+uniform int _range = 1;
+
+uniform float _depthMin;
+uniform float _depthMax;
+uniform float _depthMult;
+
+
+[numthreads(32, 32, 1)]
+void CSClearTexture(uint3 id: SV_DispatchThreadID)
+{
+    uint maxSize = screenWidth*screenHeight*4;
+    if(id.x < maxSize)
+    {
+        //renderTexture[id.xy] = float4(1.0,1.0,1.0,1.0);
+        //normalsTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        geometryTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        laplacianTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        //normalDiffTexture[id.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        //normalVectorTexture[id.xy] = float4(0.0, 0.0, 0.0, 1.0);
+    }
+}
+
+[numthreads(1024, 1, 1)]
+void CSClearBuffer(uint3 id: SV_DispatchThreadID)
+{
+    const uint maxSize = screenWidth*screenHeight*4;
+    const uint clearMask = (uint)0xFFFFFFFF;
+    if(id.x < maxSize)
+    {
+        renderBuffer[id.x] = clearMask;
+    }
+
+    /*const uint maxDepthSize = depthWidth*depthHeight;
+    if(id.x < maxDepthSize)
+    {
+        depthBuffer[id.x] = 1.0;
+    }*/
+}
+
+
+[numthreads(32,32,1)]
+void CSDepthRange(uint3 id : SV_DispatchThreadID)
+{
+    //const int3 zeros = float3(0,0,0);
+    //const int3 gridSize = int3(volumeGridSize.xyz);
+    //const int3 compressGridSizeMinusOne = int3(gridSize.x-1, gridSize.y-1, gridSize.z-1);
+    
+    //uint totalGridCount = (uint)volumeGridSize.x * (uint)volumeGridSize.y * (uint)volumeGridSize.z;
+
+    float2 tCoords = float2(id.xy);
+
+    float d = depthTexture[tCoords];
+    /*if(d < 0.0 || d > 8.0)
+    {
+        return;
+    }*/
+
+    int dInt = (int)(d * 100000000.0);
+    InterlockedMin(rangeBuf[0], dInt);
+    InterlockedMax(rangeBuf[1], dInt);
+}

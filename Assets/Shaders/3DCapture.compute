@@ -1,0 +1,1823 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSClear
+#pragma kernel CSClearTexture
+#pragma kernel CSClearBuffer
+#pragma kernel CSOctant
+#pragma kernel CSTsdfGrid
+#pragma kernel CSTexture
+#pragma kernel CSRender
+#pragma kernel CSRenderAll
+#pragma kernel CSScreenWorldNormals
+#pragma kernel CSDepthRange
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+#define USE_LINEAR_FLOATS
+#define USE_SINGLE_RGB_BUFFER
+#define USE_RGBD_BUFFER
+//#define SINGLE_POINTS
+//#define STORE_NORMALS
+#define USE_CPU_DEPTH
+//#define LOCAL_NORMALS
+
+RWStructuredBuffer<uint> volumeBuffer;
+RWStructuredBuffer<uint> volumeColorBuffer;
+RWStructuredBuffer<int> octantBuffer;
+RWStructuredBuffer<uint> renderBuffer;
+
+RWTexture2D<float4> renderTexture;
+RWTexture2D<float4> normalsTexture;
+RWTexture2D<float4> normalVectorTexture;
+RWTexture2D<float4> normalDiffTexture;
+RWTexture2D<float4> geometryTexture;
+RWTexture2D<float4> laplacianTexture;
+
+StructuredBuffer<int> cellBuffer;
+StructuredBuffer<int> octantLookup;
+StructuredBuffer<int> volumeLookup;
+StructuredBuffer<float> gaussianCoeffs;
+//StructuredBuffer<int> allOctantBuffer;
+
+Texture2D<float4> colorTexture;
+Texture2D<float> depthTexture;
+Texture2D<float> confTexture;
+
+SamplerState samplerconfTexture;
+RWStructuredBuffer<int> rangeBuf;
+
+uniform float4x4 camIntrinsicsInverse;
+uniform float4x4 localToWorld;
+uniform float4x4 viewProjMatrix;
+uniform float4x4 displayMatrix;
+
+uniform float depthWidth;
+uniform float depthHeight;
+uniform uint screenWidth;
+uniform uint screenHeight;
+uniform float gridSizeDiag;
+uniform float _thresholdPos = 224.0;
+uniform float _thresholdNeg = 224.0;
+uniform float _distanceCutoff = 0.00635;
+uniform float _threshold = 0.95;
+//uniform float _distanceCutoff = 0.0127;
+
+uniform float4 volumeBounds;
+uniform float4 volumeOrigin;
+uniform float4 volumeGridSize;
+uniform float4 volumeGridSizeWorld;
+uniform float4 volumeMin;
+uniform float4 cellDimensions;
+uniform float4 octantDimensions;
+uniform float4 octantWorldLength;
+uniform float4 viewVector;
+uniform float4 viewRight;
+
+uniform uint volumeOffset;
+uniform uint numVolumes;
+uniform uint totalCells;
+uniform int orientation;
+uniform uint depthResolution;
+uniform int _range = 1;
+
+uniform float _depthMin;
+uniform float _depthMax;
+uniform float _depthMult;
+
+uniform int computeMaxEdgeSize;
+uniform float4 camPos;
+//uniform uint4 octantDensity;
+
+float3 rgb2hsv(float3 c)
+{
+    float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    float4 p = lerp(float4(c.bg, K.wz), float4(c.gb, K.xy), step(c.b, c.g));
+    float4 q = lerp(float4(p.xyw, c.r), float4(c.r, p.yzx), step(p.x, c.r));
+
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-6;
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+ 
+
+// All components are in the range [0…1], including hue.
+float3 hsv2rgb(float3 c)
+{
+    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+    float3 newVal = c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+    return newVal;
+}
+
+float3 yuv2rgb(uint y, uint u, uint v) {
+    int r = y + (1.370705 * (v - 128));
+    int g = y - (0.698001 * (v - 128)) - (0.337633 * (u - 128));
+    int b = y + (1.732446 * (u - 128));
+    r = clamp(r, 0, 255);
+    g = clamp(g, 0, 255);
+    b = clamp(b, 0, 255);
+    return float3(r, g, b);
+}
+
+[numthreads(1024,1,1)]
+void CSClear(uint3 id : SV_DispatchThreadID)
+{
+    if(volumeOffset + id.x >= totalCells * numVolumes)
+    {
+        return;
+    }
+
+    volumeColorBuffer[volumeOffset+id.x] = 0;
+
+    uint mainIdx = (volumeOffset + id.x);
+    uint bufIdx = (volumeOffset + id.x) / 2;
+
+    if(mainIdx % 2 == 0)
+    {
+        uint vals = volumeBuffer[bufIdx] & 0xFFFF0000;
+        uint oneVal = f32tof16(1.0);
+        volumeBuffer[bufIdx] = vals | oneVal;
+    }
+    else
+    {
+        uint vals = volumeBuffer[bufIdx] & 0x0000FFFF;
+        uint oneVal = f32tof16(1.0);
+        volumeBuffer[bufIdx] = vals | (oneVal << 16);
+    }
+}
+
+[numthreads(32, 32, 1)]
+void CSClearTexture(uint3 id: SV_DispatchThreadID)
+{
+    uint maxSize = screenWidth*screenHeight*4;
+    if(id.x < maxSize)
+    {
+        //renderTexture[id.xy] = float4(1.0,1.0,1.0,1.0);
+        //normalsTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        geometryTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        laplacianTexture[id.xy] = float4(0.0,0.0,0.0,1.0);
+        //normalDiffTexture[id.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        //normalVectorTexture[id.xy] = float4(0.0, 0.0, 0.0, 1.0);
+    }
+}
+
+[numthreads(1024, 1, 1)]
+void CSClearBuffer(uint3 id: SV_DispatchThreadID)
+{
+    const uint maxSize = screenWidth*screenHeight*4;
+    const uint clearMask = (uint)0xFFFFFFFF;
+    if(id.x < maxSize)
+    {
+        renderBuffer[id.x] = clearMask;
+    }
+
+    /*const uint maxDepthSize = depthWidth*depthHeight;
+    if(id.x < maxDepthSize)
+    {
+        depthBuffer[id.x] = 1.0;
+    }*/
+}
+
+[numthreads(32,32,1)]
+void CSOctant(uint3 gid : SV_DispatchThreadID)
+{
+    const int3 zeros = float3(0,0,0);
+    const int3 gridSize = int3(volumeGridSize.xyz);
+    const int3 compressGridSizeMinusOne = int3(gridSize.x-1, gridSize.y-1, gridSize.z-1);
+    const float CONFIDENCE_THRESH = 2.0/255.0;
+
+    float2 tCoords = float2(gid.xy);
+    //tCoords = mul(tCoords, displayMatrix);
+    /*tCoords.x = 1.0 - tCoords.x;
+
+    if(orientation == 3)
+    {
+        tCoords.xy = float2(1.0 - tCoords.x, 1.0 - tCoords.y);
+    }
+    else if(orientation == 1)
+    {
+        tCoords.xy = float2(1.0 - tCoords.y, tCoords.x);
+    }*/
+
+    uint id = tCoords.y * depthWidth + tCoords.x;
+    if(id >= depthResolution)
+    {
+        return;
+    }
+
+    octantBuffer[id] = -1;
+
+    float d = depthTexture[tCoords];
+    if(d < 0.0 || d > 8.0)
+    {
+        return;
+    }
+
+    const float DEPTH_THRESH = 0.04;
+
+    const float2 ONE_O_WH = float2(1.0, 1.0) / float2(depthWidth, depthHeight);
+    float c = confTexture.SampleLevel(samplerconfTexture, tCoords * ONE_O_WH, 0);
+    //uint fourMult = id % 4;
+    //uint conf = ((c >> (fourMult*8)) & 0x000000FF);
+    if(c < CONFIDENCE_THRESH)
+    {
+        return;
+    }
+
+    int oneConfBad = 0;
+    int range = 2;
+    for(int i = -range; i <= range && !oneConfBad; ++i)
+    {
+        for(int j = -range; j <= range && !oneConfBad; ++j)
+        {
+            float2 tc2 = ((float2(gid.x+i*8+0.5, gid.y+j*8+0.5))); // uniforms.cameraResolution;
+            //float2 tc2 = tCoords + float2(i+0.5, j+0.5);
+            if(tc2.x >= 0 && tc2.x < depthWidth && tc2.y >= 0 && tc2.y < depthHeight)
+            {
+                float conf2 = confTexture.SampleLevel(samplerconfTexture, tc2 * ONE_O_WH, 0);
+                float d2 = depthTexture[tc2];
+                if(conf2 < CONFIDENCE_THRESH || abs(d-d2) > DEPTH_THRESH)
+                {
+                    oneConfBad = 1;
+                }
+            }
+        }
+    }
+
+    if(oneConfBad == 1)
+    {
+        return;
+    }
+
+    float4 localPoint = mul(camIntrinsicsInverse, float4(tCoords, 1.0, 0.0)) * d;
+    localPoint.w = 1.0;
+    float4 worldPoint = mul(localToWorld, localPoint);
+    worldPoint = worldPoint / worldPoint.w;
+
+    float3 posCell = floor(((worldPoint.xyz - volumeMin.xyz) / volumeBounds.xyz) * volumeGridSize.xyz);
+
+    int3 idPos = (int3)clamp((int3)posCell.xyz, zeros, compressGridSizeMinusOne);
+
+    //this check works...
+    if(idPos.x >= 0 && idPos.x < gridSize.x && idPos.y >= 0 && idPos.y < gridSize.y && idPos.z >= 0 && idPos.z < gridSize.z)
+    {
+        float3 worldPosCell = volumeMin.xyz + float3(idPos) * volumeGridSizeWorld.xyz + 0.5 * volumeGridSizeWorld.xyz;
+
+        float sdf = distance(worldPoint.xyz, worldPosCell);
+
+        //for some reason this check is never > -gridSizeDiag...
+        if(sdf >= -gridSizeDiag && sdf <= gridSizeDiag)
+        {
+            uint3 octantIndices = idPos / uint3(cellDimensions.xyz);
+            uint3 octantDensity = uint3(gridSize / cellDimensions.xyz);
+            //stores world space index of which 32x16x32 octant grid
+            octantBuffer[id] = octantIndices.x + octantIndices.y * octantDensity.x + octantIndices.z * octantDensity.x * octantDensity.y;
+        }
+    }   
+}
+
+[numthreads(32,32,1)]
+void CSTsdfGrid (uint3 gid : SV_DispatchThreadID)
+{
+    const int3 zeros = float3(0,0,0);
+    const int3 gridSize = int3(volumeGridSize.xyz);
+    const int3 compressGridSizeMinusOne = int3(gridSize.x-1, gridSize.y-1, gridSize.z-1);
+    
+    //uint totalGridCount = (uint)volumeGridSize.x * (uint)volumeGridSize.y * (uint)volumeGridSize.z;
+
+    float2 tCoords = float2(gid.xy);
+    //tc = mul(tc, displayMatrix);
+    /*tc.xy = float2(1.0-tc.x, tc.y);
+           
+    if (orientation == 1) {
+        // Portrait
+        tc.xy = float2(1.0 - tc.y, tc.x);
+    }
+    else if (orientation == 3) {
+        // Landscape left
+        tc.xy = float2(1.0 - tc.x, 1.0 - tc.y);
+    }*/
+
+    uint id = tCoords.y * depthWidth + tCoords.x;
+    if(id >= depthResolution)
+    {
+        return;
+    }
+
+    //if no octant at point
+    if(octantBuffer[id] == -1 || cellBuffer[id] == -1)
+    {
+        return;
+    }
+
+    float d = depthTexture[tCoords];
+    if(d < 0.0 || d > 8.0)
+    {
+        return;
+    }
+
+    const float CONFIDENCE_THRESH = 2.0/255.0;
+    const float2 ONE_O_WH = float2(1.0, 1.0) / float2(depthWidth, depthHeight);
+    float c = confTexture.SampleLevel(samplerconfTexture, tCoords * ONE_O_WH, 0);//[tCoords * 0.125];
+    //uint fourMult = id % 4;
+    //uint conf = ((c >> (fourMult*8)) & 0x000000FF);
+    if(c < CONFIDENCE_THRESH)
+    {
+        return;
+    }
+
+    const float DEPTH_THRESH = 0.04;
+
+    int oneConfBad = 0;
+    int range = 2;
+    //or if any neighbors confidence is < 2, exit...
+    for(int i = -range; i <= range && !oneConfBad; ++i)
+    {
+        for(int j = -range; j <= range && !oneConfBad; ++j)
+        {
+            float2 tc2 = ((float2(gid.x+i*8+0.5, gid.y+j*8+0.5))); // uniforms.cameraResolution;
+            //float2 tc2 = tCoords + float2(i+0.5, j+0.5);
+            if(tc2.x >= 0 && tc2.x < depthWidth && tc2.y >= 0 && tc2.y < depthHeight)
+            {
+                float conf2 = confTexture.SampleLevel(samplerconfTexture, tc2 * ONE_O_WH, 0);
+                float d2 = depthTexture[tc2];
+                if(conf2 < CONFIDENCE_THRESH || abs(d-d2) > DEPTH_THRESH)
+                {
+                    oneConfBad = 1;
+                }
+            }
+        }
+    }
+    
+    if(oneConfBad == 1)
+    {
+        return;
+    }
+
+    float4 localPoint = mul(camIntrinsicsInverse, float4(tCoords, 1.0, 0.0)) * d;
+    localPoint.w = 1.0;
+    float4 worldPoint = mul(localToWorld, localPoint);
+    worldPoint = worldPoint / worldPoint.w;
+
+    float3 posCell = floor(((worldPoint.xyz - volumeMin.xyz) / volumeBounds.xyz) * volumeGridSize.xyz);
+
+    int3 idPos = clamp((int3)posCell.xyz, zeros, compressGridSizeMinusOne);
+
+    //worth doing a 3-level loop here to acquire additional samples after checking against sdf?
+    
+    float3 worldPosCell = volumeMin.xyz + float3(idPos) * volumeGridSizeWorld.xyz + 0.5 * volumeGridSizeWorld.xyz;
+
+    float sdf = distance(worldPoint.xyz, worldPosCell);
+    //this check works...
+    //if(idPos.x >= 0 && idPos.x < gridSize.x && idPos.y >= 0 && idPos.y < gridSize.y && idPos.z >= 0 && idPos.z < gridSize.z)
+    if( sdf >= -gridSizeDiag && sdf <= gridSizeDiag)
+    {
+        uint3 cellIndices = idPos % uint3(cellDimensions.xyz);
+        float tsdf = sdf;
+
+        const uint cellXY = uint(cellDimensions.x * cellDimensions.y);
+        const uint cellX = uint(cellDimensions.x);
+        const uint cellXYZ = uint(cellDimensions.x * cellDimensions.y * cellDimensions.z);
+        
+        uint nIdx = cellIndices.x + cellX * cellIndices.y + cellXY * cellIndices.z;
+        
+        uint cellIdx = cellBuffer[id] * cellXYZ + nIdx;
+
+        //if(cellIdx < totalGridCount)
+        {
+            float old_d = 1.0;
+
+            uint bufIdx = cellIdx / 2;
+            if(cellIdx % 2 == 0)
+            {
+                old_d = f16tof32((uint)volumeBuffer[bufIdx]);
+            }
+            else
+            {
+                old_d = f16tof32((uint)(volumeBuffer[bufIdx] >> 16));
+            }
+
+            uint old_r = volumeColorBuffer[cellIdx] & 0x000000FF;
+            uint old_g = (volumeColorBuffer[cellIdx] >> 8) & 0x000000FF;
+            uint old_b = (volumeColorBuffer[cellIdx] >> 16) & 0x000000FF;
+            uint old_w = (volumeColorBuffer[cellIdx] >> 24) & 0x000000FF;
+
+#ifdef STORE_NORMALS
+            float4 sampledColor = float4(0,0,0,1);
+            uint sr = 0;
+            uint sg = 0;
+            uint sb = 0;
+
+            //check neighbors in screen space for world space position... only do so if neighbors are also valid...
+            int nRange = 1;
+            int nOneConfBad = 0;
+            //or if any neighbors confidence is < 2, exit...
+            for(int i = -nRange; i <= nRange && !nOneConfBad; ++i)
+            {
+                for(int j = -nRange; j <= nRange && !nOneConfBad; ++j)
+                {
+                    if(i == 0 && j != 0 || j == 0 && i != 0)
+                    {
+                        float2 tc2 = ((float2(gid.x+i, gid.y+j))); // uniforms.cameraResolution;
+                        //float2 tc2 = tCoords + float2(i+0.5, j+0.5);
+                        if(tc2.x >= 0 && tc2.x < depthWidth && tc2.y >= 0 && tc2.y < depthHeight)
+                        {
+                            uint idN = tc2.y * depthWidth + tc2.x;
+                            if(idN >= depthResolution)
+                            {
+                                nOneConfBad = 1;
+                                break;
+                            }
+                            
+                            if(octantBuffer[idN] == -1 || cellBuffer[idN] == -1)
+                            {
+                                nOneConfBad = 1;
+                                break;
+                            }
+
+                            float d2 = depthTexture[tc2];
+                            if(d2 < 0.0 || d2 > 8.0)
+                            {
+                                nOneConfBad = 1;
+                                break;
+                            } 
+                        }
+                        else
+                        {
+                            nOneConfBad = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if(nOneConfBad > 0)
+            {
+                return;
+            }
+
+            float3 sampledColorNorm = float3(0,0,0);
+            
+            float2 tc2R = ((float2(gid.x+1, gid.y))); // uniforms.cameraResolution;
+            float d2R = depthTexture[tc2R];
+            float4 localPointR = mul(camIntrinsicsInverse, float4(tc2R, 1.0, 0.0)) * d2R;
+            localPointR.w = 1.0;
+            float4 worldPointR = mul(localToWorld, localPointR);
+            worldPointR = worldPointR / worldPointR.w;
+
+            float2 tc2L = ((float2(gid.x-1, gid.y))); // uniforms.cameraResolution;
+            float d2L = depthTexture[tc2L];
+            float4 localPointL = mul(camIntrinsicsInverse, float4(tc2L, 1.0, 0.0)) * d2L;
+            localPointL.w = 1.0;
+            float4 worldPointL = mul(localToWorld, localPointL);
+            worldPointL = worldPointL / worldPointL.w;
+
+            float2 tc2U = ((float2(gid.x, gid.y+1))); // uniforms.cameraResolution;
+            float d2U = depthTexture[tc2U];
+            float4 localPointU = mul(camIntrinsicsInverse, float4(tc2U, 1.0, 0.0)) * d2U;
+            localPointU.w = 1.0;
+            float4 worldPointU = mul(localToWorld, localPointU);
+            worldPointU = worldPointU / worldPointU.w;
+
+            float2 tc2B = ((float2(gid.x, gid.y-1))); // uniforms.cameraResolution;
+            float d2B = depthTexture[tc2B];
+            float4 localPointB = mul(camIntrinsicsInverse, float4(tc2B, 1.0, 0.0)) * d2B;
+            localPointB.w = 1.0;
+            float4 worldPointB = mul(localToWorld, localPointB);
+            worldPointB = worldPointB / worldPointB.w;
+            
+
+            float3 vecT = normalize(worldPointU.xyz - worldPoint.xyz);//normalize(dLP - dRP);
+            float3 vecB = normalize(worldPointB.xyz - worldPoint.xyz);//normalize(dBP - dTP);//
+            float3 vecR = normalize(worldPointR.xyz - worldPoint.xyz);
+            float3 vecL = normalize(worldPointL.xyz - worldPoint.xyz);
+
+            float counter = 0.0;
+            
+            float3 n1 = cross(vecT, vecR);
+            if(length(n1) > 0.0)
+            {
+                sampledColorNorm += normalize(n1);
+                counter += 1.0;
+            }
+
+            float3 n2 = cross(vecR, vecB);
+            if(length(n2) > 0.0)
+            {
+                sampledColorNorm += normalize(n2);
+                counter += 1.0;
+            }
+
+            float3 n3 = cross(vecB, vecL);
+            if(length(n3) > 0.0)
+            {
+                sampledColorNorm += normalize(n3);
+                counter += 1.0;
+            }
+
+            float3 n4 = cross(vecL, vecT);
+            if(length(n4) > 0.0)
+            {
+                sampledColorNorm += normalize(n4);
+                counter += 1.0;
+            }
+
+            if(counter > 0.0)
+            {
+                sampledColorNorm /= counter;
+            }
+            //float3 LRNorm = normalize(worldPointL.xyz - worldPointR.xyz);
+            //float3 UBNorm = normalize(worldPointU.xyz - worldPointB.xyz);
+            //float3 worldNorm = normalize(cross(LRNorm, UBNorm));
+
+
+            //worldNorm.xyz = worldNorm.xyz * 0.5 + 0.5;
+
+            sampledColor.xyz = sampledColorNorm.xyz * 0.5 + 0.5;
+            //float4 sampledColor = colorTexture[tCoords * 0.9375];//float4(c*0.5, c*0.5, c*0.5, 1.0);//
+            
+            //run laplacian filter as well...
+
+            sr = (uint)(sampledColor.x * 255.0);// & 0x000000FF;
+            sg = (uint)(sampledColor.y * 255.0);// & 0x0000FF00) >> 8);
+            sb = (uint)(sampledColor.z * 255.0);// & 0x00FF0000) >> 16);
+#else
+            float4 sampledColor = colorTexture[tCoords * 0.9375];//float4(c*0.5, c*0.5, c*0.5, 1.0);//
+           
+            uint sr = (uint)(sampledColor.x * 255.0);// & 0x000000FF;
+            uint sg = (uint)(sampledColor.y * 255.0);// & 0x0000FF00) >> 8);
+            uint sb = (uint)(sampledColor.z * 255.0);// & 0x00FF0000) >> 16);
+#endif
+            float w = 1.0;
+            //could make w here based on angle to surface...
+            float w_sum = (float)old_w + w;
+            if(w_sum < 256.0)
+            {
+                float oneOSum = 1.0 / w_sum;
+
+                uint v = f32tof16((old_d * old_w + tsdf * w) * oneOSum);
+
+                if(cellIdx % 2 == 0)
+                {
+                    uint vals = volumeBuffer[bufIdx] & 0xFFFF0000;
+                    volumeBuffer[bufIdx] = vals | v;
+                }
+                else
+                {
+                    uint vals = volumeBuffer[bufIdx] & 0x0000FFFF;
+                    volumeBuffer[bufIdx] = vals | (v << 16);
+                }
+
+                uint r = (uint)(((float)old_r * old_w + sr * w) * oneOSum);
+                uint g = (uint)(((float)old_g * old_w + sg * w) * oneOSum);
+                uint b = (uint)(((float)old_b * old_w + sb * w) * oneOSum);
+
+                volumeColorBuffer[cellIdx] = (r & 0x000000FF) | ((g & 0x000000FF) << 8) | ((b & 0x000000FF) << 16) | ((((uint)w_sum) & 0x000000FF) << 24);
+            }
+        }     
+    }
+}
+
+uint convertToUint(float f)
+{
+#ifdef USE_LINEAR_FLOATS
+    f*=0xFFFFFFFF;
+    return uint(f);
+#else
+    return asuint(f);
+#endif
+}
+
+float convertToFloat(uint i)
+{
+#ifdef USE_LINEAR_FLOATS
+    return float(i) / float(0xFFFFFFFF);
+#else
+    return asfloat(i);
+#endif
+}
+
+void DrawPoint(int index, uint udepth, uint3 color)
+{
+    if (renderBuffer[4*index+3] < udepth)
+    {
+        return;
+    }
+
+    InterlockedMin(renderBuffer[4*index+3], udepth);
+
+    //now zero out the end of the depth
+    udepth &= 0xFFFFFF00;
+
+    //NOTE: we aren't checking values here.  We could do a bitwise operation to enforce 0-255
+
+    uint r = udepth+color.r;
+    uint g = udepth+color.g;
+    uint b = udepth+color.b;
+
+    InterlockedMin(renderBuffer[4*index], r);
+    InterlockedMin(renderBuffer[4*index+1], g);
+    InterlockedMin(renderBuffer[4*index+2], b);
+}
+
+void DrawPoint(float4 p, uint3 color)
+{
+    int x = p.x;
+    int y = p.y;
+    int index = x + y * screenWidth;        
+    uint udepth = convertToUint(p.z);
+
+    if ((p.x >= 0) && (p.x < (int)screenWidth) && (p.y >= 0) && (p.y < (int)screenHeight))
+    {
+        DrawPoint(index, udepth, color);
+    }
+}
+
+[numthreads(32,32,1)]
+void CSTexture (uint3 id : SV_DispatchThreadID)
+{
+    if ((id.x >= screenWidth) || (id.y >= screenHeight))
+        return;
+
+    const uint maxIndex = screenWidth * screenHeight * 4;
+    uint index = id.x + id.y * screenWidth;
+    if(4*index+2 > maxIndex)
+    {
+        return;
+    }
+
+    float3 color = float3(1.0,1.0,1.0);
+    
+    uint mask = (uint)0x000000FF;
+
+    uint rb1 = renderBuffer[4*index];
+    uint rb2 = renderBuffer[4*index+1];
+    uint rb3 = renderBuffer[4*index+2];
+
+    rb1 = rb1 & mask;
+    rb2 = rb2 & mask;
+    rb3 = rb3 & mask;
+    
+    color.r = ((float)rb1)/(float)255.0;
+    color.g = ((float)rb2)/(float)255.0;
+    color.b = ((float)rb3)/(float)255.0;
+    //these lines are causing major crashes...
+    //color.r = (float)((rb1 & mask))/255.0;
+    //color.g = (float)((renderBuffer[4*index+1] & mask))/255.0;
+    //color.b = (float)((renderBuffer[4*index+2] & mask))/255.0;
+    //color.a = 1.0 - convertToFloat(renderBuffer[4*index+3]);
+
+    //float4 cur = rgbd(id.xy);
+
+	 renderTexture[id.xy] = float4(color, 1.0);
+/*#ifdef USE_DEPTH_SHADE
+     DestinationDepth[id.xy] = float4(cur.a, cur.a, cur.a, cur.a);
+#endif*/
+}
+
+/*float4 rgbd(uint2 uv)
+{
+    uint index = uv.x + uv.y * screenWidth;
+    float4 color = float4(1,1,1,1);
+    if(index >= screenWidth * screenHeight)
+    {
+        return color;
+    }
+    
+    color.r = (renderBuffer[4*index]& 0x000000ff)/255.0;
+    color.g = (renderBuffer[4*index+1]& 0x000000ff)/255.0;
+    color.b = (renderBuffer[4*index+2]& 0x000000ff)/255.0;
+    color.a = 1.0 - convertToFloat(renderBuffer[4*index+3]);
+
+    // if (isnan(color.a))
+    //    color.a = 0;
+
+    return color;
+}*/
+
+float4 getWorldPointFromDepthImage(float2 tc)
+{
+    float d = depthTexture[tc].r;
+    float3 camSpacePoint = float3(tc, 1.0);
+    float3 dP = mul(camIntrinsicsInverse, float4(camSpacePoint, 0)).xyz * d;
+    
+    float4 dP4 = float4(dP.xyz, 1.0);
+    float4 worldPoint = mul(localToWorld, dP4);
+    worldPoint.xyzw /= worldPoint.w;
+    return worldPoint;
+}
+
+float4 ProjectPoint(float4 pos)
+{
+    float4 p = mul(viewProjMatrix, pos);
+    
+    if (p.w <= 0) {
+         // point is exactly on camera focus point, screen point is undefined
+         // unity handles this by returning 0,0,0
+         p = float4(0,0,0,0);
+     } else {
+         // convert x and y from clip space to window coordinates
+         //NOTE: I think it looks better without the half pixel offset, but not sure why
+         p.x = ((p.x/p.w + 1)*.5 * (depthWidth));
+         p.y = ((p.y/p.w + 1)*.5 * (depthHeight));
+         p.z = (((p.z/p.w) + 1)*.5);
+        
+     }
+     return p;
+}
+
+
+[numthreads(32,32,1)]
+void CSScreenWorldNormals(uint3 id : SV_DispatchThreadID)
+{
+    float2 tCoords = float2(id.xy);
+
+/*#ifdef USE_CPU_DEPTH
+    tCoords.y = tCoords.y + (depthHeight/2);
+    if(tCoords.y > depthHeight)
+    {
+        tCoords.y = tCoords.y - depthHeight;
+    }
+#endif*/
+    //tCoords = tCoords / float2(depthWidth, depthHeight);
+    //float4 tc = float4(tCoords, 0, 1);
+    //tc = mul(displayMatrix, tc);
+    //tCoords = tc.xy * float2(depthWidth, depthHeight);
+
+    //float2 tCoords = float2(id.xy)/float2(screenWidth, screenHeight);
+    //tCoords = tCoords * float2(depthWidth, depthHeight);
+    const float CONFIDENCE_THRESH = 1.0/255.0;
+
+    //check confidence texture here as well?
+    const float2 ONE_O_WH = float2(1.0, 1.0) / float2(depthWidth, depthHeight);
+    float c = confTexture.SampleLevel(samplerconfTexture, tCoords * ONE_O_WH, 0);
+    //uint fourMult = id % 4;
+    //uint conf = ((c >> (fourMult*8)) & 0x000000FF);
+    //if(c > CONFIDENCE_THRESH)
+    {
+        //normalsTexture[tCoords] = float4(0.0, 0.0, 0.0, 1.0);
+        //return;
+    
+    
+    float3 sampledColorNorm = float3(0,0,0);//norm;//(yCbCrToRGB * float4(norm, 1.0)).rgb; 
+    float d = depthTexture[tCoords].r;
+#ifdef LOCAL_NORMALS
+    float3 camSpacePoint = float3(tCoords, 1.0);
+    float3 dP = mul(camIntrinsicsInverse, float4(camSpacePoint, 0)).xyz * d;
+    //if(length(dP) > _distanceCutoff)
+    //{
+    //    normalsTexture[tCoords] = float4(0,0,1,1);
+    //    return;
+    //}
+    float4 wp = float4(dP, 1.0);
+#else
+    float4 wp = getWorldPointFromDepthImage(tCoords);
+#endif
+
+    //float offsetMult = float2(1,1)/float2(screenWidth, screenHeight);
+    //offsetMult *= float2(depthWidth, depthHeight);
+    
+    /*float offsetMult = 7.5;
+    const float2 offsets[8] = {
+            float2(-offsetMult, -offsetMult),
+            float2(-offsetMult, 0),
+            float2(-offsetMult, offsetMult),
+            float2(0, -offsetMult),
+            float2(0, offsetMult),
+            float2(offsetMult, -offsetMult),
+            float2(offsetMult, 0),
+            float2(offsetMult, offsetMult)
+        };*/
+
+    const float2 offsets[8] = {
+            float2(-1, -1),
+            float2(-1, 0),
+            float2(-1, 1),
+            float2(0, -1),
+            float2(0, 1),
+            float2(1, -1),
+            float2(1, 0),
+            float2(1, 1)
+        };
+
+    float dR = depthTexture[tCoords + offsets[6]].r;
+    float3 camPointdR = float3(tCoords + offsets[6], 1.0);
+    float3 dRP = mul(camIntrinsicsInverse, float4(camPointdR, 0)).xyz * dR;
+
+#ifdef LOCAL_NORMALS
+    float4 wpR = float4(dRP, 1.0);
+#else
+    float4 dRP4 = float4(dRP.xyz, 1.0);
+    float4 wpR = mul(localToWorld, dRP4);
+    wpR.xyz /= wpR.w;
+#endif
+
+    float dL = depthTexture[tCoords + offsets[1]].r;
+    float3 camPointdL = float3(tCoords + offsets[1], 1.0);
+    float3 dLP = mul(camIntrinsicsInverse, float4(camPointdL, 0)).xyz * dL; 
+    
+#ifdef LOCAL_NORMALS
+    float4 wpL = float4(dLP, 1.0);
+#else
+    float4 dLP4 = float4(dLP.xyz, 1.0);
+    float4 wpL = mul(localToWorld, dLP4);
+    wpL.xyz /= wpL.w;
+#endif
+
+    float dT = depthTexture[tCoords + offsets[4]].r;
+    float3 camPointdT = float3(tCoords + offsets[4], 1.0);
+    float3 dTP = mul(camIntrinsicsInverse, float4(camPointdT, 0)).xyz * dT; 
+
+#ifdef LOCAL_NORMALS
+    float4 wpT = float4(dTP, 1.0);
+#else
+    float4 dTP4 = float4(dTP.xyz, 1.0);
+    float4 wpT = mul(localToWorld, dTP4);
+    wpT.xyz /= wpT.w;
+#endif
+
+    float dB = depthTexture[tCoords + offsets[3]].r;
+    float3 camPointdB = float3(tCoords + offsets[3], 1.0);
+    float3 dBP = mul(camIntrinsicsInverse, float4(camPointdB, 0)).xyz * dB;
+
+#ifdef LOCAL_NORMALS
+    float4 wpB = float4(dBP, 1.0);
+#else
+    float4 dBP4 = float4(dBP.xyz, 1.0);
+    float4 wpB = mul(localToWorld, dBP4);
+    wpB.xyz /= wpB.w;
+#endif
+    
+    float3 vecT = normalize(wpT.xyz - wp.xyz);//normalize(dLP - dRP);
+    float3 vecB = normalize(wpB.xyz - wp.xyz);//normalize(dBP - dTP);//
+    float3 vecR = normalize(wpR.xyz - wp.xyz);
+    float3 vecL = normalize(wpL.xyz - wp.xyz);
+
+    float counter = 0.0;
+    
+    float3 n1 = cross(vecT, vecR);
+    if(length(n1) > 0.0)
+    {
+        sampledColorNorm += normalize(n1);
+        counter += 1.0;
+    }
+
+    float3 n2 = cross(vecR, vecB);
+    if(length(n2) > 0.0)
+    {
+        sampledColorNorm += normalize(n2);
+        counter += 1.0;
+    }
+
+    float3 n3 = cross(vecB, vecL);
+    if(length(n3) > 0.0)
+    {
+        sampledColorNorm += normalize(n3);
+        counter += 1.0;
+    }
+
+    float3 n4 = cross(vecL, vecT);
+    if(length(n4) > 0.0)
+    {
+        sampledColorNorm += normalize(n4);
+        counter += 1.0;
+    }
+
+    if(counter > 0.0)
+    {
+        sampledColorNorm /= counter;
+
+#ifdef LOCAL_NORMALS
+        sampledColorNorm = -normalize(sampledColorNorm);
+        //sampledColorNorm = sampledColorNorm + float3(1.0, 1.0, 1.0) * float3(0.5, 0.5, 0.5);
+#endif
+    }
+
+    //sampledColorNorm = abs(sampledColorNorm);
+    //negative numbers show up as black...
+    //sampledColorNorm.xyz = sampledColorNorm.xyz * 0.5 + 0.5;
+
+    //todo - should we check confidence image and not check against bad confidence?
+    /*int closestI = 0;
+    float minI = 9999;
+    for(int i = -_range; i <= _range; ++i)
+    {
+        if(i != 0)
+        {
+            float2 tCoordsI = tCoords + float2(i, 0);
+            //float d2 = depthTexture[tCoordsI].r;
+            float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(i,0));
+            //if(abs(d-d2) < minI)
+            if(distance(worldPoint.xyz, wp.xyz) < minI)
+            {
+                closestI = i;
+                ///minI = abs(d-d2);
+                minI = distance(worldPoint.xyz, wp.xyz);
+            }
+        }
+    }
+
+    int closestJ = 0;
+    float minJ = 9999;
+    for(int j = -_range; j <= _range; ++j)
+    {
+        if(j != 0)
+        {
+            float2 tCoordsJ = tCoords + float2(0, j);
+            //float d3 = depthTexture[tCoordsJ].r;
+            
+            float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(0,j));
+            //if(abs(d-d3) < minJ)
+            if(distance(worldPoint.xyz, wp.xyz) < minJ)
+            {
+                closestJ = j;
+                //minJ = abs(d-d3);
+                minJ = distance(worldPoint.xyz, wp.xyz);
+            }
+        }
+    }
+
+    float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(closestI,0));
+    float4 worldPoint2 = getWorldPointFromDepthImage(tCoords + float2(0,closestJ));
+    float3 vec = normalize(worldPoint.xyz - wp.xyz);
+    float3 vec2 = normalize(worldPoint2.xyz - wp.xyz);
+
+    if(closestI < 0)
+    {
+        if(closestJ < 0)
+        {
+            sampledColorNorm += normalize(cross(vec2, vec));
+        }
+        else
+        {
+            sampledColorNorm += normalize(cross(vec, vec2));
+        }
+    }
+    else
+    {
+        if(closestJ < 0)
+        {
+            sampledColorNorm += normalize(cross(vec, vec2));
+        }
+        else
+        {
+            sampledColorNorm += normalize(cross(vec2, vec));
+        }
+    }
+
+    normalsTexture[id.xy] = float4(sampledColorNorm, 1.0);*/
+    
+    /*float3 viewVec = float3(0,0,-1);
+
+    float counter = 0;
+    for(int i = -_range; i <= _range; ++i)
+    {
+        for(int j = -_range; j <= _range; ++j)
+        {
+            if(i == j || (i == 0 && j == 0))
+            {
+
+            }
+            else
+            {
+                float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(i,j));
+                float4 worldPoint2 = getWorldPointFromDepthImage(tCoords + float2(j,i));
+                float3 vec = normalize(worldPoint.xyz - wp.xyz);
+                float3 vec2 = normalize(worldPoint2.xyz - wp.xyz);
+
+                float3 wToP = float3(float2(i, j), 0);
+                float3 wToP2 = float3(float2(j, i), 0);
+                float3 wCross = cross(wToP, wToP2);
+                
+                if(dot(viewVec, wCross) < 0)
+                {
+                    sampledColorNorm += normalize(cross(vec2, vec));    
+                }
+                else
+                {
+                    sampledColorNorm += normalize(cross(vec, vec2));
+                }
+                counter+=1.0;
+            }
+        }
+    }*/
+
+    /*int closestI = 0;
+    int closestJ = 0;
+    float minDist = 9999;
+    for(int i = -_range; i <= _range; ++i)
+    {
+        for(int j = -_range; j <= _range; ++j)
+        {
+            if(i != 0 && j != 0)
+            {
+                float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(i,j));
+                //float4 worldPoint2 = getWorldPointFromDepthImage(tCoords + float2(0,j));
+                float dist = distance(worldPoint.xyz, wp.xyz);
+                if(dist < minDist)
+                {
+                    closestI = i;
+                    closestJ = j;
+                    minDist = dist;
+                }
+            }
+        }
+    }
+
+    int closestI2 = 0;
+    int closestJ2 = 0;
+    minDist = 9999;
+    for(int i = -_range; i <= _range; ++i)
+    {
+        for(int j = -_range; j <= _range; ++j)
+        {
+            if((i == 0 && j == 0) || (i == closestI && j == closestJ))
+            {
+
+            }
+            else
+            {
+                float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(i,j));
+                //float4 worldPoint2 = getWorldPointFromDepthImage(tCoords + float2(0,j));
+                float dist = distance(worldPoint.xyz, wp.xyz);
+                if(dist < minDist)
+                {
+                    closestI2 = i;
+                    closestJ2 = j;
+                    minDist = dist;
+                }
+            }
+        }
+    }
+
+    float4 worldPoint = getWorldPointFromDepthImage(tCoords + float2(closestI,closestJ));
+    float4 worldPoint2 = getWorldPointFromDepthImage(tCoords + float2(closestI2,closestJ2));
+    float3 vec = normalize(worldPoint.xyz - wp.xyz);
+    float3 vec2 = normalize(worldPoint2.xyz - wp.xyz);
+    
+    float3 wToP = float3(float2(closestI, closestJ), 0);
+    float3 wToP2 = float3(float2(closestI2, closestJ2), 0);
+    float3 wCross = cross(wToP, wToP2);
+
+    float3 viewVec = float3(0,0,-1);
+
+    if(dot(viewVec, wCross) < 0)
+    {
+        sampledColorNorm += normalize(cross(vec2, vec));
+    }
+    else
+    {
+        sampledColorNorm += normalize(cross(vec, vec2));
+    }*/
+    
+
+    //normalsTexture[tCoords] = float4(wp.xyz, 1.0);
+    //normalsTexture[tCoords] = float4(normalize(float3(sampledColorNorm.xy, 0)), 1.0);
+    normalVectorTexture[tCoords] = float4(sampledColorNorm, 1.0);
+    geometryTexture[tCoords] = wp;
+    //
+    }
+    //else
+    //{
+    //    normalsTexture[tCoords] = float4(0.0, 0.0, 0.0, 1.0);
+    //    geometryTexture[tCoords] = float4(0.0, 0.0, 0.0, 1.0);
+    //}
+}
+
+float calcLaplacianMag(float2 tCoords, float localRange)
+{
+/*#ifdef USE_CPU_DEPTH
+    const float2 ONE_O_WH = float2(1,1);
+#else*/
+    const float2 ONE_O_WH = float2(1440.0/1536.0, 1920.0/2048.0);
+//#endif
+
+    const float PIXEL_OFFSET = localRange; 
+    const float2 offsets[8] = {
+        float2(-ONE_O_WH.x, -ONE_O_WH.y),
+        float2(-ONE_O_WH.x, 0),
+        float2(-ONE_O_WH.x, ONE_O_WH.y),
+        float2(0, -ONE_O_WH.y),
+        float2(0, ONE_O_WH.y),
+        float2(ONE_O_WH.x, -ONE_O_WH.y),
+        float2(ONE_O_WH.x, 0),
+        float2(ONE_O_WH.x, ONE_O_WH.y)
+    };
+
+    float2 tCoordsUp = (tCoords + offsets[4] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsDown = (tCoords + offsets[3] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsLeft = (tCoords + offsets[1] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsRight = (tCoords + offsets[6] * PIXEL_OFFSET);// * ONE_O_WH;
+
+    float2 tCoordsUpRight = (tCoords + offsets[7] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsDownRight = (tCoords + offsets[2] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsLeftUp = (tCoords + offsets[5] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsRightDown = (tCoords + offsets[0] * PIXEL_OFFSET);// * ONE_O_WH;
+    
+    float4 normColor = normalsTexture[tCoords];
+    float4 normColorUp = normalsTexture[tCoordsUp];
+    float4 normColorDown = normalsTexture[tCoordsDown];
+    float4 normColorLeft = normalsTexture[tCoordsLeft];
+    float4 normColorRight = normalsTexture[tCoordsRight];
+    float4 normColorUpRight = normalsTexture[tCoordsUpRight];
+    float4 normColorDownRight = normalsTexture[tCoordsDownRight];
+    float4 normColorLeftUp = normalsTexture[tCoordsLeftUp];
+    float4 normColorRightUp = normalsTexture[tCoordsRightDown];
+
+    float4 lap = normColor * 8 - normColorUp - normColorDown - normColorLeft - normColorRight - normColorUpRight - normColorDownRight - normColorLeftUp - normColorRightUp;
+    return length(lap.xyz);
+}
+
+float sumLocalNormals(float2 tCoords, float localRange)
+{
+//#ifdef USE_CPU_DEPTH
+    const float2 ONE_O_WH = float2(1,1);
+//#else
+    //const float2 ONE_O_WH = float2(1440.0/1536.0, 1920.0/2048.0);
+//#endif
+
+    const float PIXEL_OFFSET = localRange; 
+    const float2 offsets[8] = {
+        float2(-ONE_O_WH.x, -ONE_O_WH.y),
+        float2(-ONE_O_WH.x, 0),
+        float2(-ONE_O_WH.x, ONE_O_WH.y),
+        float2(0, -ONE_O_WH.y),
+        float2(0, ONE_O_WH.y),
+        float2(ONE_O_WH.x, -ONE_O_WH.y),
+        float2(ONE_O_WH.x, 0),
+        float2(ONE_O_WH.x, ONE_O_WH.y)
+    };
+
+    float2 tCoordsUp = (tCoords + offsets[4] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsDown = (tCoords + offsets[3] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsLeft = (tCoords + offsets[1] * PIXEL_OFFSET);// * ONE_O_WH;
+    float2 tCoordsRight = (tCoords + offsets[6] * PIXEL_OFFSET);// * ONE_O_WH;
+
+    //float2 tCoordsUpRight = (tCoords + offsets[7] * PIXEL_OFFSET);// * ONE_O_WH;
+    //float2 tCoordsUpLeft = (tCoords + offsets[2] * PIXEL_OFFSET);// * ONE_O_WH;
+    //float2 tCoordsDownRight = (tCoords + offsets[5] * PIXEL_OFFSET);// * ONE_O_WH;
+    //float2 tCoordsDownLeft = (tCoords + offsets[0] * PIXEL_OFFSET);// * ONE_O_WH;
+    
+    float4 normColor = normalVectorTexture[tCoords];
+    float4 normColorUp = normalVectorTexture[tCoordsUp];
+    float4 normColorDown = normalVectorTexture[tCoordsDown];
+    float4 normColorLeft = normalVectorTexture[tCoordsLeft];
+    float4 normColorRight = normalVectorTexture[tCoordsRight];
+    //float4 normColorUpRight = normalVectorTexture[tCoordsUpRight];
+    //float4 normColorDownRight = normalVectorTexture[tCoordsDownRight];
+    //float4 normColorUpLeft = normalVectorTexture[tCoordsUpLeft];
+    //float4 normColorDownLeft = normalVectorTexture[tCoordsDownLeft];
+
+    float val = dot(normalize(float3(normColorUp.xyz)), normalize(float3(normColor.xyz)));
+    float val2 = dot(normalize(float3(normColorLeft.xyz)), normalize(float3(normColor.xyz)));
+    float val3 = dot(normalize(float3(normColorRight.xyz)), normalize(float3(normColor.xyz)));
+    float val4 = dot(normalize(float3(normColorDown.xyz)), normalize(float3(normColor.xyz)));
+
+    return (val + val2 + val3 + val4) / 4;
+}
+
+[numthreads(32,32,1)]
+void CSDepthRange(uint3 id : SV_DispatchThreadID)
+{
+    //const int3 zeros = float3(0,0,0);
+    //const int3 gridSize = int3(volumeGridSize.xyz);
+    //const int3 compressGridSizeMinusOne = int3(gridSize.x-1, gridSize.y-1, gridSize.z-1);
+    
+    //uint totalGridCount = (uint)volumeGridSize.x * (uint)volumeGridSize.y * (uint)volumeGridSize.z;
+
+    float2 tCoords = float2(id.xy);
+
+    float d = depthTexture[tCoords];
+    /*if(d < 0.0 || d > 8.0)
+    {
+        return;
+    }*/
+
+    int dInt = (int)(d * 100000000.0);
+    InterlockedMin(rangeBuf[0], dInt);
+    InterlockedMax(rangeBuf[1], dInt);
+}
+
+struct Edge
+{
+    int currentIndex;
+   
+    
+    float p0, p1;
+    //x,z,u,v 
+    float4 p[4];
+    int yVals[4];
+    float4 v0, v1, currentEdge;
+    float4 delta[4];
+
+
+    void init(float4 corners[8], uint4 side, int yindex, bool left)
+    {
+
+        currentIndex=1;
+        int dir = left ? 1 : -1;
+
+         //lets make two lists of indices in each direction
+        float2 uvCoords[4] = {float2(0,0), float2(1,0), float2(1,1), float2(0,1)};
+
+    //x,z,u,v 
+
+        for (uint i = 0; i < 4; i++)
+        {
+            int s = (yindex + dir*i + 4) % 4;
+    
+            float4 c = corners[side[s]];
+            float2 uv = uvCoords[s];
+            p[i] = float4(c.xz, uv.xy);
+            yVals[i] = (int) c.y;
+        }
+
+        delta[0] = float4(0,0,0,0);
+        for (uint j=1; j < 4; j++)
+        {
+            if (yVals[j] >=  yVals[j-1])
+                delta[j] = (p[j] - p[j-1]) * rcp((float)  (yVals[j] -  yVals[j-1]+1));
+            else
+                delta[j] = 1;
+        }
+
+        currentEdge = p[0];
+    }
+
+    float getP(int y, int ymin, int ymax)
+    {
+        if (ymax > ymin)
+            return clamp((float)(y - ymin) / (float)(ymax - ymin+1), 0, 1);
+        else
+            return 1;
+    }
+
+    void process(int y, bool getMin)
+    {
+        
+        if (y > yVals[currentIndex])
+        {
+            currentIndex++;
+            if (currentIndex > 3)
+            {
+                 currentEdge = p[3];
+                currentIndex=3;
+                return;
+            }
+        }
+
+        if (yVals[currentIndex] == y)
+        {
+            currentEdge = p[currentIndex];
+
+        }
+        else
+        {
+            currentEdge += delta[currentIndex];
+
+        }
+
+    }
+
+    float getX(int y)
+    {
+        int index=1;
+        //as 3 is our top number, just run this twice 
+        if (yVals[index] < y)
+            index++;
+        if (yVals[index] < y)
+            index++;
+
+        p0 =  getP(y, yVals[index-1], yVals[index]);
+        v0 = lerp(p[index - 1], p[index], p0);
+       
+        return v0.x;
+    }  
+};
+
+struct Quad
+{
+    Edge e1, e2;
+    int ymin, ymax;
+    int xmin, xmax;
+    uint yindex;
+
+    float4 delta;
+    float4 value;
+
+    float4 corner[4];
+
+    void init(float4 corners[8], uint4 side)
+    {
+
+
+        ymin = -1;
+        ymax = -1;
+        xmin = 100000000;
+        xmax = -1;
+        yindex = 0;
+        for (uint i = 0; i < 4; i++)
+        {
+            corner[i] = corners[side[i]];
+            yindex = corners[side[i]].y < corners[side[yindex]].y ? i : yindex;
+            xmin = (int) (corners[side[i]].x < xmin ? corners[side[i]].x : xmin);
+            xmax = (int) (corners[side[i]].x > xmax ? corners[side[i]].x : xmax);
+            ymax = (int) (corners[side[i]].y > ymax ? corners[side[i]].y : ymax);
+           
+        }
+
+        //now we know the ymin 
+        ymin = (int) corners[side[yindex]].y;
+
+        //edge check
+       ymax =  min(ymin+computeMaxEdgeSize, ymax);
+
+        e1.init(corners, side, yindex, true);
+        e2.init(corners, side, yindex, false);
+        
+    }
+
+    bool isValid(int y)
+    {
+        return ((y >= ymin) && (y <= ymax));
+
+    }
+
+  
+    int2 process(int y)
+    {
+         e1.process(y, true);
+         e2.process(y, false);
+
+        delta = (e2.currentEdge - e1.currentEdge) * rcp(e2.currentEdge.x - e1.currentEdge.x+1);
+        value = e1.currentEdge;
+
+        int2 bounds = int2(e1.currentEdge.x, e2.currentEdge.x);
+
+        if (bounds[1].x >= screenWidth)
+            bounds[1].x = screenWidth-1;
+
+        
+
+        if (bounds[0] < 0)
+        {
+            value+= delta*(-bounds[0]);
+            bounds[0] = value;
+        }
+
+        bounds[1] = min(bounds[0]+ computeMaxEdgeSize, bounds[1]);
+
+         return bounds;
+    }
+
+     float4 getValue(int x)
+    {
+        value+= delta;
+        return value;
+    }
+    float getBounds(int y)
+    {
+       return .5*(e1.getX(y)+e2.getX(y));
+    }
+
+};
+
+void DrawQuads(float4 corners[8], uint3 color, uint4 sides[3], int numSides)
+{
+    //for (int i=0; i < 8; i++)
+    // if ((corners[i].w <= 0) || (corners[i].z <= 0)|| (corners[i].z >= 1))
+    //    return;
+
+    for (int i=0; i<numSides; i++)
+    {
+        int d=0;
+        for (int s=1; s < 4; s++)
+        {
+            int2 lD = (int2)abs((int2)corners[sides[i][s]].xy - (int2)corners[sides[i][0]].xy);
+            d =  max(lD.x, d);
+            d =  max(lD.y, d); 
+        }
+        
+#ifdef SINGLE_POINTS
+        if (d <= 1)
+        {
+#ifdef COLOR_BY_TYPE
+            color=uint3(0,0,255);
+#endif
+             for (int s=0; s < 4; s++)
+                DrawPoint(corners[sides[i][s]], color);
+              
+        }
+        else if (d <= 2)
+        {
+#ifdef COLOR_BY_TYPE
+            color=uint3(255,255,0);
+#endif
+            for (int s2=0; s2 < 4; s2++)
+                DrawPoint(corners[sides[i][s2]], color);
+
+            //now do the midpoints betwen the corners
+            for (int s3=1; s3 < 4; s3++)
+                 DrawPoint(.5*corners[sides[i][0]] + .5*corners[sides[i][s3]], color);
+
+            //now the other two corners 
+            DrawPoint(.5*corners[sides[i][2]] + .5*corners[sides[i][1]], color);
+            DrawPoint(.5*corners[sides[i][2]] + .5*corners[sides[i][3]], color);
+        }
+        else
+#endif
+        {
+
+            int2 bounds;
+            Quad q;
+            q.init(corners, sides[i]);
+#ifdef COLOR_BY_TYPE
+            color = uint3(255,0,255);
+#endif
+            for (int y = q.ymin; y <= q.ymax; y++)
+            {
+                bounds = q.process(y);
+                for (int x = bounds[0]; x <= bounds[1]; x++)
+                {
+                    if (x >=  screenWidth)
+                        break;
+
+                    float4 value = q.getValue(x);
+                    
+                    float z = value.y;
+
+#ifdef ADD_SHADING
+                    float2 uv = value.zw;
+
+
+                    float dcx = abs((uv.x*2.0)-1.0);
+                    float dcy = abs((uv.y*2.0)-1.0);
+        
+                    float m = 1-.8*smoothstep(0, 1, (pow(dcx,4)+pow(dcy,4)));
+
+                    float blendShade = (float)(bounds[1]-bounds[0]) / (.05*screenWidth);
+                    m = (1.0-blendShade) + blendShade*m; 
+
+                    m = clamp(m, 0, 1);
+                   // color=m*color;
+
+                    //color.r = 255*m;
+#endif
+
+                    int index= x + y*screenWidth;
+                    
+                    if ((x>= 0) && (y>=0) && (x< screenWidth) && (y < screenHeight))
+                    {
+#ifdef ADD_SHADING
+                        DrawPoint(index, convertToUint(z), m*color);
+#else
+                        DrawPoint(index, convertToUint(z), color);
+#endif
+                    }
+                }
+                
+            }
+
+            
+        }
+    }
+}
+
+void DrawCube(float4 geo, uint3 color)
+{  
+   float4 corners[8];
+   for (uint i=0; i <8; i++)
+    {
+        corners[i] = ProjectPoint(float4(geo.xyz,1) + geo.w*float4(
+                    //i%2==0? -1: 1,
+                    i&0x00000001 ? 1 : -1,
+                    i&0x00000002 ? 1 : -1,
+                    i&0x00000004 ? 1 : -1,
+                   // (i/2)%2==0? -1: 1,
+                   // (i/4)==0? -1 : 1,
+                    0));
+
+        if (corners[i].w <= 0)
+            return;
+    }
+
+    float3 cubePos = camPos.xyz-geo.xyz;
+
+    int2 minBounds = corners[0].xy;
+    int2 maxBounds = corners[0].xy;
+    for (int i2=1; i2<8; i2++)
+    {
+        minBounds = min(minBounds, corners[i2].xy);
+        maxBounds = max(maxBounds, corners[i2].xy);
+    }
+
+
+    if (((maxBounds.x < 0) && (maxBounds.y < 0)) || ((minBounds.x > (int)screenWidth) && (minBounds.x > (int)screenHeight)))
+    {
+        return;
+    }
+
+    //find the max distance
+    int d = (int) max(maxBounds.x - minBounds.x, maxBounds.y - minBounds.y);
+
+    if (d < 0)
+    {
+        //something is wrong
+        return;
+    }
+    else if (d == 0)
+    {
+        //closest point?
+        int cindex=0;
+#ifdef COLOR_BY_TYPE
+        color=uint3(255,0,0);
+#endif
+        cindex |= cubePos.z > 0 ? 4: 0;
+        cindex |= cubePos.y > 0 ? 2: 0;
+        cindex |= cubePos.x > 0 ? 1 :0;
+        DrawPoint(corners[cindex], color);
+        //DestinationColor[corners[cindex].xy] = float4(1,0,1,1);
+        return;
+    }
+#ifdef SINGLE_POINTS
+    else if (d == 1)
+    {
+#ifdef COLOR_BY_TYPE
+        color=uint3(0,255,0);
+#endif
+        for (int i=0; i < 8; i++)
+        {
+            //DestinationColor[corners[i].xy] = float4(1,1,0,1); 
+            DrawPoint(corners[i], color);
+        }
+
+        return;
+    }
+#endif
+    else if (d < computeMaxEdgeSize)
+    {
+        uint4 sides[3];
+
+        int numSides=0;
+        float scale = geo.w;
+        //x
+        if (cubePos.x < -scale)
+        {
+            sides[numSides++] = uint4(0,4,6,2);
+        }
+        else if (cubePos.x > scale)
+        {
+            sides[numSides++] = uint4(5,1,3,7);
+        }
+    
+        //y
+        if (cubePos.y < -scale)
+        {
+            sides[numSides++] = uint4(0,1,5,4);
+        }
+        else if (cubePos.y > scale)
+        {
+            sides[numSides++] = uint4(6,7,3,2);
+        }
+
+        //z
+        if (cubePos.z < -scale)
+        {
+            sides[numSides++] = uint4(1,0,2,3);
+        }
+        else if (cubePos.z > scale)
+        {
+            sides[numSides++] = uint4(4,5,7,6);
+        }
+
+        DrawQuads(corners, color, sides, numSides);
+    }    
+}
+
+
+[numthreads(1024,1,1)]
+void CSRender(uint3 id : SV_DispatchThreadID)
+{
+    //take octant buffer and volume buffers and render valid points back out into space
+    const uint WRITE_THRESHOLD = 8;
+
+    uint octantIdx = (volumeOffset + id.x) / totalCells;
+    
+    int octantID = octantLookup[octantIdx];
+
+    if(octantID == -1)
+    {
+       return;
+    }
+   
+    uint cellID = (volumeOffset + id.x) % totalCells;
+
+    uint mainIdx = (uint)volumeLookup[octantIdx] * totalCells + cellID;
+
+    uint old_w = (volumeColorBuffer[mainIdx] >> 24) & 0x000000FF;
+
+    if(old_w < WRITE_THRESHOLD)
+    {
+        return;
+    }
+
+    uint bufIdx = mainIdx / 2;
+
+    float tsdf = 0;
+    if(mainIdx % 2 == 0)
+    {
+        tsdf = f16tof32((uint)volumeBuffer[bufIdx]);
+    }
+    else
+    {
+        tsdf = f16tof32((uint)(volumeBuffer[bufIdx] >> 16));
+    }
+    
+    if(tsdf >= -gridSizeDiag && tsdf <= gridSizeDiag)
+    {
+        //if a valid tsdf value.. render this point...first calculate the world space position and project
+        uint gridXY = (uint)octantDimensions.x * (uint)octantDimensions.y;
+        //uint gridYZ = (uint)octantDimensions.y * (uint)octantDimensions.z;
+
+        if(gridXY == 0)
+        {
+            gridXY = 1;
+        }
+        
+        uint gridX = octantDimensions.x;
+        //uint gridZ = octantDimensions.z;
+
+        if(gridX == 0)
+        {
+            gridX = 1;
+        }
+        
+        //figure out which "octant" within the overall grid, we're currently sampling from...
+        uint z = octantID / gridXY;
+        uint val = octantID - (z * gridXY);
+        uint y = val / gridX;
+        uint x = val - (y * gridX);
+
+        float3 octantCoords = float3(float(x),float(y),float(z));
+        //octantCoords = clamp(octantCoords, zeros, octantMax);
+        
+        float3 minBounds = volumeOrigin.xyz - (volumeBounds.xyz * 0.5) + (octantCoords.xyz * octantWorldLength.xyz);
+        
+        uint cellXY = (uint(cellDimensions.x) * uint(cellDimensions.y));
+        uint zCell = cellID / cellXY;
+        uint cellVal = cellID - (zCell * cellXY);
+        uint cellX = uint(cellDimensions.x);
+        uint yCell = cellVal / cellX;
+        uint xCell = cellVal - (yCell * cellX);
+
+        float3 coords = float3(xCell,yCell,zCell);
+
+        float4 worldPos = float4(minBounds + (coords * volumeGridSizeWorld.xyz) + (0.5 * volumeGridSizeWorld.xyz), 1.0);
+
+        float4 clipPos = mul(viewProjMatrix, worldPos);
+
+        if(clipPos.w > 0)
+        {
+            clipPos /= clipPos.w;
+
+            if(clipPos.x > -1.0 && clipPos.x < 1.0 && clipPos.y > -1.0 && clipPos.y < 1.0 && clipPos.z > -1.0 && clipPos.z < 1.0)
+            {
+                uint vcb = volumeColorBuffer[mainIdx];
+                uint old_r = vcb & 0x000000FF;
+                uint old_g = (vcb >> 8) & 0x000000FF;
+                uint old_b = (vcb >> 16) & 0x000000FF;
+                
+                //float3 rgbCol = float3(float(old_r)/255.0, float(old_g)/255.0, float(old_b)/255.0);
+                //float greyscale = dot(rgbCol, float3(.222, .707, .071));
+
+                //float3 hsv = rgb2hsv(rgbCol);
+                //hsv.y = hsv.y * saturate((float)old_w * 3.0 / 255.0);
+                //float3 newRgbCol = hsv2rgb(hsv);
+                //float3 newRgbCol = rgbCol;//lerp(float3(greyscale, greyscale, greyscale), rgbCol, 0.0);
+                //uint3 newRGBInt = uint3(old_r, old_g, old_b);
+                
+                /*clipPos.xy = clamp(clipPos.xy, 0, float2(screenWidth-1, screenHeight-1));
+                //int x = (int)clipPos.x;
+                //int y = (int)clipPos.y;
+                //int index = x + y * (int)screenWidth;        */
+                
+                /*clipPos = clipPos * 0.5 + 0.5;
+                //clipPos.y = 1.0 - clipPos.y;
+                clipPos.xy *= float2(screenWidth, screenHeight);
+                uint udepth = convertToUint(clipPos.z);//1.0-clipPos.z);
+                float2 tc2 = ((float2(clipPos.x, clipPos.y)));
+                DrawPoint((uint)(((uint)tc2.x) + screenWidth * ((uint)tc2.y)), udepth, uint3(old_r, old_g, old_b));*/
+
+                DrawCube(float4(worldPos.xyz, 0.003), uint3(old_r, old_g, old_b));
+                //DrawCube(float4(worldPos.xyz, 0), uint3(old_r, old_g, old_b));
+                //DrawCube(float4(worldPos.xyz, 0.003), uint3(newRgbCol.x*255.0, newRgbCol.y*255.0, newRgbCol.z*255.0));
+                //DrawCube(float4(worldPos.xyz, 0.003), uint3((uint)(newRgbCol.x*255.0), (uint)(newRgbCol.y*255.0), (uint)(newRgbCol.z*255.0)));
+            }
+        }
+    }
+}
+
+[numthreads(1024,1,1)]
+void CSRenderAll(uint3 id : SV_DispatchThreadID)
+{
+    /*uint octantIdx = (volumeOffset + id.x) / totalCells;
+    
+    int octantID = allOctantBuffer[octantIdx];
+
+    if(octantID == -1)
+    {
+       return;
+    }
+   
+    uint cellID = (volumeOffset + id.x) % totalCells;
+
+    uint mainIdx = (uint)octantID * totalCells + cellID;
+    uint bufIdx = mainIdx / 2;
+
+    float tsdf = 0;
+    if(mainIdx % 2 == 0)
+    {
+        tsdf = f16tof32((uint)volumeBuffer[bufIdx]);
+    }
+    else
+    {
+        tsdf = f16tof32((uint)(volumeBuffer[bufIdx] >> 16));
+    }
+    
+    if(tsdf >= -gridSizeDiag && tsdf <= gridSizeDiag)
+    {
+        //if a valid tsdf value.. render this point...first calculate the world space position and project
+        uint gridXY = (uint)octantDimensions.x * (uint)octantDimensions.y;
+        //uint gridYZ = (uint)octantDimensions.y * (uint)octantDimensions.z;
+
+        if(gridXY == 0)
+        {
+            gridXY = 1;
+        }
+        
+        uint gridX = octantDimensions.x;
+        //uint gridZ = octantDimensions.z;
+
+        if(gridX == 0)
+        {
+            gridX = 1;
+        }
+        
+        //figure out which "octant" within the overall grid, we're currently sampling from...
+        uint z = octantID / gridXY;
+        uint val = octantID - (z * gridXY);
+        uint y = val / gridX;
+        uint x = val - (y * gridX);
+
+        float3 octantCoords = float3(float(x),float(y),float(z));
+        //octantCoords = clamp(octantCoords, zeros, octantMax);
+        
+        float3 minBounds = volumeOrigin.xyz - (volumeBounds.xyz * 0.5) + (octantCoords.xyz * octantWorldLength.xyz);
+        
+        uint cellXY = (uint(cellDimensions.x) * uint(cellDimensions.y));
+        uint zCell = cellID / cellXY;
+        uint cellVal = cellID - (zCell * cellXY);
+        uint cellX = uint(cellDimensions.x);
+        uint yCell = cellVal / cellX;
+        uint xCell = cellVal - (yCell * cellX);
+
+        float3 coords = float3(xCell,yCell,zCell);
+
+        float4 worldPos = float4(minBounds + (coords * volumeGridSizeWorld.xyz) + (0.5 * volumeGridSizeWorld.xyz), 1.0);
+
+        float4 clipPos = mul(viewProjMatrix, worldPos);
+
+        if(clipPos.w > 0)
+        {
+            clipPos /= clipPos.w;
+
+            if(clipPos.x > -1.0 && clipPos.x < 1.0 && clipPos.y > -1.0 && clipPos.y < 1.0 && clipPos.z > -1.0 && clipPos.z < 1.0)
+            {
+                clipPos = clipPos * 0.5 + 0.5;
+                
+                //clipPos.y = 1.0 - clipPos.y;
+
+                clipPos.xy *= float2(screenWidth, screenHeight);
+
+                //clipPos.xy = clamp(clipPos.xy, 0, float2(screenWidth-1, screenHeight-1));
+
+                uint old_r = volumeColorBuffer[mainIdx] & 0x000000FF;
+                uint old_g = (volumeColorBuffer[mainIdx] >> 8) & 0x000000FF;
+                uint old_b = (volumeColorBuffer[mainIdx] >> 16) & 0x000000FF;
+                uint old_w = (volumeColorBuffer[mainIdx] >> 24) & 0x000000FF;
+
+                //int x = (int)clipPos.x;
+                //int y = (int)clipPos.y;
+                //int index = x + y * (int)screenWidth;        
+                
+                uint udepth = convertToUint(clipPos.z);//1.0-clipPos.z);
+                
+                if(old_w > 1)
+                {
+                    //float2 tc2 = ((float2(clipPos.x, clipPos.y)));
+                    //DrawPoint((uint)(((uint)tc2.x) + screenWidth * ((uint)tc2.y)), udepth, uint3(old_r, old_g, old_b));
+                    DrawCube(float4(worldPos.xyz, 0.002), uint3(old_r, old_g, old_b));
+                }
+            }
+        }
+    }*/
+}
