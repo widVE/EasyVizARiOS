@@ -761,8 +761,12 @@ Light:
   m_BoundingSphereOverride: {x: 0, y: 7e-45, z: 9.1835e-41, w: 0}
   m_UseBoundingSphereOverride: 0
   m_UseViewFrustumForShadowCasterCull: 1
+  m_ForceVisible: 0
   m_ShadowRadius: 0
   m_ShadowAngle: 0
+  m_LightUnit: 1
+  m_LuxAtDistance: 1
+  m_EnableSpotReflector: 1
 --- !u!4 &705507995
 Transform:
   m_ObjectHideFlags: 0
@@ -822,8 +826,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 21544e7e5644e4d82b1e836c3bcb76a5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _captureOnce: 0
-  _startWithQRCode: 1
+  _captureOnce: 1
   _anchorManager: {fileID: 0}
   _qrManager: {fileID: 1776610788}
   _anchorPrefab: {fileID: 0}
@@ -841,6 +844,8 @@ MonoBehaviour:
     type: 2}
   m_DepthMaterial: {fileID: 2100000, guid: 532c31d608c1345149f4d9949940ecf5, type: 2}
   _depthMaterialSmall: {fileID: 2100000, guid: 4220ef2269a024a2c9bd9f3b3ea0ccad, type: 2}
+  _depthMaterialLocalPC: {fileID: 2100000, guid: e137410a756c14f94a1ee5bf1158e401,
+    type: 2}
   _confCopyMaterial: {fileID: 2100000, guid: 9ffebbb815c574812b52aebf532a4f28, type: 2}
   m_OcclusionManager: {fileID: 385336016}
   m_session: {fileID: 5472436117178709916}
@@ -1020,6 +1025,7 @@ LineRenderer:
   m_RayTraceProcedural: 0
   m_RayTracingAccelStructBuildFlagsOverride: 0
   m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
@@ -1169,6 +1175,7 @@ MonoBehaviour:
   cameraManager: {fileID: 385336013}
   lastResult: 
   _headsetID: 
+  _capture: {fileID: 766593888}
 --- !u!114 &1776610789
 MonoBehaviour:
   m_ObjectHideFlags: 0

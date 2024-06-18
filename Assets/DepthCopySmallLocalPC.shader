@@ -1,4 +1,4 @@
-Shader "Unlit/CopyDepthShaderSmall"
+Shader "Unlit/CopyDepthShaderSmallLocalPC"
 {
     Properties
     {
@@ -92,32 +92,33 @@ Shader "Unlit/CopyDepthShaderSmall"
                 v = mul(_camIntrinsics, v) * d;
                 v.w = 1.0;
 
-                float fX = (v.x * 1000.0) + 4095.0;       //-2047->2047 to 0->4095 - 12 bits
-                float fY = (v.y * 1000.0) + 4095.0;       //same as above
+                //float fX = (v.x * 1000.0f) + 4095.0f;       //-2047->2047 to 0->4095 - 12 bits
+                //float fY = (v.y * 1000.0f) + 4095.0f;       //same as above
                 
-                if(fX > 8191.0)
-                {
-                    fX = 8191.0;
-                }
+                //if(fX > 8191.0f)
+                //{
+                //    fX = 8191.0f;
+                //}
 
-                if(fY > 8191.0)
-                {
-                    fY = 8191.0;
-                }
+                //if(fY > 8191.0f)
+                //{
+                //    fY = 8191.0f;
+                //}
 
                 float fZ = v.z * 1000.0;
 
                 //v = mul(localToWorld, v);
                 //v = v / v.w;
 
-                uint u16X = (uint)fX;
-                uint u16Y = (uint)fY;
+                //uint u16X = (uint)fX;
+                //uint u16Y = (uint)fY;
                 uint u16Z = (uint)fZ;
+                uint u16A = 0.003 * 1000;
                 
-                uint u8X = (u16X & 0x000000FF);
-                uint u8Y = (u16Y & 0x000000FF);
-                uint u8Z = ((u16X & 0x00000F00) >> 8) | (u16Y & 0x00000F00) >> 4;
-                uint u8A = ((u16X & 0x0000F000) >> 12) | (u16Y & 0x0000F000) >> 8;
+                uint u8X = (u16Z & 0x000000FF);
+                uint u8Y = (u16Z & 0x0000FF00) >> 8;
+                uint u8Z = (u16A & 0x000000FF);
+                uint u8A = (u16A & 0x0000FF00) >> 8;
 /*#if USE_CPU_DEPTH
                 //_depthWidth = 192, _depthHeight = 256
                 

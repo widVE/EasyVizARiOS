@@ -3,6 +3,7 @@
 #define DIRECT_DEPTH_WRITE
 #define USE_CS
 #define IPAD
+#define WRITE_BMP
 
 using System;
 using System.Text;
@@ -60,9 +61,6 @@ using UnityEngine;
 
 		[SerializeField]
 		bool _captureOnce = false;
-
-		[SerializeField]
-		bool _startWithQRCode = false;
 
 		bool _bDoneCapturing = false;
 		bool _bCapturedColor = false;
@@ -156,6 +154,9 @@ using UnityEngine;
 
 		[SerializeField]
 		Material _depthMaterialSmall;
+
+		[SerializeField]
+		Material _depthMaterialLocalPC;
 
 		public Material _confCopyMaterial;
 		
@@ -303,6 +304,12 @@ using UnityEngine;
 
 		[SerializeField]
 		TMPro.TMP_Dropdown _modeDropdown;
+
+		[NonSerialized]
+		public Vector3 _currentPosition;
+
+		[NonSerialized]
+		public Quaternion _currentRotation;
 		
 #if UNITY_IOS
 
@@ -424,7 +431,7 @@ using UnityEngine;
 		void Start()
 		{
 			_ourDepthV = new Texture2D(DEPTH_HEIGHT, DEPTH_WIDTH, TextureFormat.RFloat, false);
-			_ourDepthVSmall = new Texture2D(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW, TextureFormat.RFloat, false);
+			_ourDepthVSmall = new Texture2D(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW, TextureFormat.RGBA32, false);
 			_ourDepthH = new Texture2D(DEPTH_WIDTH_RAW, DEPTH_HEIGHT_RAW, TextureFormat.RFloat, false);
 			_ourConfV = new Texture2D(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW, TextureFormat.R8, false);
 			_ourColorV = new Texture2D(COLOR_HEIGHT, COLOR_WIDTH, TextureFormat.RGBA32, false);
@@ -589,6 +596,7 @@ using UnityEngine;
 			//octreeShader.SetFloat("_distanceCutoff",0.0127f);
 
 			_currDate = DateTime.Now.ToString("M_dd_yyyy_hh_mm_ss");
+
 			LogDebug();
 		}
 
@@ -1029,7 +1037,22 @@ using UnityEngine;
 							_bCapturedDepth = false;
 							_bDoneCapturing = true;
 
-							Debug.Log("Done with capture");
+							//int lastIndex = sPC.LastIndexOf("_");
+							string prefix = _currPath;//System.IO.Path.Combine(, fName)
+							
+							string sPC = System.IO.Path.Combine(prefix, _opticalFlowWriteCount.ToString("D4")+"_localPC.bmp");
+							string sColor = System.IO.Path.Combine(prefix,_opticalFlowWriteCount.ToString("D4")+"_color.png");
+							string transFile = System.IO.Path.Combine(prefix,_opticalFlowWriteCount.ToString("D4")+"_trans.txt");
+							string sDepth = System.IO.Path.Combine(prefix,_opticalFlowWriteCount.ToString("D4")+"_depth.bmp");
+							//string sI = prefix+"_intensity.png";
+							
+							
+							//System.IO.File.WriteAllText(System.IO.Path.Combine(Application.persistentDataPath, prefix+"________.txt"), prefix);
+							StartCoroutine(UploadImages(sColor, sPC, sDepth, transFile, prefix));
+
+							//Debug.Log("Done with capture");
+
+
 						}
 					}
 				}
@@ -1037,8 +1060,63 @@ using UnityEngine;
 
 			_lastPosition = _arCamera.transform.position;
 		}
+		IEnumerator UploadImages(string sColor, string sPC, string sDepth, string transFile, string prefix)
+		{
+			Debug.Log("Uploading image");
 
-        void Update()
+			while(!File.Exists(sColor) && !File.Exists(transFile) && !File.Exists(sDepth))// && !File.Exists(sI)) 
+			{
+				yield return new WaitForSeconds(0.1f);
+			}
+			
+			Debug.Log("Uploading image2");
+			
+			FileInfo sColorInfo = null;
+			FileInfo sTransInfo = null;
+			FileInfo sIInfo = null;
+			FileInfo sDepthInfo = null;
+			
+			sColorInfo = new FileInfo(sColor);
+			sTransInfo = new FileInfo(transFile);
+			//sIInfo = new FileInfo(sI);
+			sDepthInfo = new FileInfo(sDepth);
+			
+			while(sColorInfo.Length == 0 || sTransInfo.Length == 0 || sDepthInfo.Length == 0)
+			{
+				yield return new WaitForSeconds(0.1f);
+			}
+			
+			Debug.Log("Uploading image3");
+			
+			Vector3 pos = _currentPosition;
+			Quaternion rot = _currentRotation;
+
+			/*string[] transLines = File.ReadAllLines(transFile);
+			Vector3 pos = Vector3.zero;
+			Quaternion rot = Quaternion.identity;
+			Matrix4x4 depthTrans = Matrix4x4.identity;
+			
+			for(int i = 0; i < 4; ++i)
+			{
+				string[] vals = transLines[i].Split(" ");
+				for(int j = 0; j < 4; ++j)
+				{
+					depthTrans[i*4+j] = float.Parse(vals[j]);
+				}
+			}
+			
+			pos = depthTrans.GetPosition();
+			rot = depthTrans.rotation;*/
+
+			EasyVizARServer.Instance.PutImageTriple("image/png", sPC, sColor, sDepth, _qrManager._locationID, DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW, TextureUploaded, pos, rot, _qrManager._headsetID, "geometry", "photo", "depth", prefix);
+		}
+
+		public void TextureUploaded(string imageURL)
+		{
+			Debug.Log("Texture uploaded to: " + imageURL);
+		}
+        
+		void Update()
         {
 			//Debug.Log("UPDATE");
             // If we are on a device that does supports neither human stencil, human depth, nor environment depth,
@@ -1091,9 +1169,9 @@ using UnityEngine;
 			if(_selectionManager != null)
 			{
 				GameObject marker = null;
-				if(_selectionManager.TryTouchMoveMarker(128, out marker))
+				//if(_selectionManager.TryTouchMoveMarker(128, out marker))
 				{
-					if(marker != null)
+					/*if(marker != null)
 					{
 						Vector2 vTest = Vector2.zero;
 						_selectionManager.TryGetEnhanced(out vTest);
@@ -1103,9 +1181,9 @@ using UnityEngine;
 						//_arCamera.GetComponent<ARCameraBackground>().customMaterial.SetVector("_PressPoint", new Vector4(vTest.x, vTest.y, 0.0f, 0.0f));
 						//_arCamera.GetComponent<ARCameraBackground>().customMaterial.SetVector("_WindowSize", _windowSize);
 						//_arCamera.GetComponent<ARCameraBackground>().customMaterial.SetFloat("_PressOffset", _pressOffset);
-					}
+					}*/
 				}
-				else
+				//else
 				{
 					//_lastMarker = null;
 
@@ -1141,6 +1219,31 @@ using UnityEngine;
 			
 			if(m_OcclusionManager != null)
 			{
+				Matrix4x4 viewMatrix = Matrix4x4.TRS(_arCamera.transform.position, _arCamera.transform.rotation, Vector3.one).inverse;
+
+				if (!m_CameraManager.subsystem.TryGetIntrinsics(out XRCameraIntrinsics cameraIntrinsics))
+				{
+					SetLastValues();
+					return;
+				}
+				
+				Matrix4x4 camIntrinsics = Matrix4x4.identity;
+				camIntrinsics.SetColumn(0, new Vector4(cameraIntrinsics.focalLength.y, 0f, 0f, 0f));
+				camIntrinsics.SetColumn(1, new Vector4(0f, cameraIntrinsics.focalLength.x, 0f, 0f));
+				camIntrinsics.SetColumn(2, new Vector4(cameraIntrinsics.principalPoint.y, cameraIntrinsics.principalPoint.x, 1f, 0f));
+
+				Matrix4x4 camInv = camIntrinsics.inverse;
+
+				Matrix4x4 viewInverse = viewMatrix.inverse;
+				Matrix4x4 flipYZ = new Matrix4x4();
+				flipYZ.SetRow(0, new Vector4(1f,0f,0f,0f));
+				flipYZ.SetRow(1, new Vector4(0f,1f,0f,0f));
+				flipYZ.SetRow(2, new Vector4(0f,0f,-1f,0f));
+				flipYZ.SetRow(3, new Vector4(0f,0f,0f,1f));
+
+				Matrix4x4 theMatrix = viewInverse * flipYZ;
+				Matrix4x4 viewProj = _lastProjMatrix * viewMatrix;
+
 				//environment depth image is RFloat format
 				if(m_OcclusionManager.TryAcquireEnvironmentDepthCpuImage(out XRCpuImage imageDepth))
 				{
@@ -1151,13 +1254,16 @@ using UnityEngine;
 					{
 						//Debug.Log("OCCLUSION FRAME");
 #if DIRECT_DEPTH_WRITE
+#if WRITE_BMP
+#else
 						//convert and write out this depth data...
 						string fName = _opticalFlowWriteCount.ToString("D4")+"depthLo.bytes";
 						File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), depthData);
 #endif
+#endif
 					}
 #endif
-					
+
 					Vector2Int outputDimensions = imageDepth.dimensions;
 
 					//set the data
@@ -1171,21 +1277,81 @@ using UnityEngine;
 					commandBuffer.name = "Env Depth Blit Pass";
 
 					//Debug.Log(outputDimensions.ToString());
-					m_DepthMaterial.SetTexture("_MainTex", _ourDepthH);
+					_depthMaterialSmall.SetTexture("_MainTex", _ourDepthH);
 					//m_DepthMaterial.SetBuffer("_depthBuffer", _depthBuffer);
-					m_DepthMaterial.SetFloat("_depthWidth", (float)outputDimensions.y);
-					m_DepthMaterial.SetFloat("_depthHeight", (float)outputDimensions.x);
-					m_DepthMaterial.SetInt("_Orientation", (int)m_CurrentScreenOrientation);
-
+					_depthMaterialSmall.SetFloat("_depthWidth", (float)outputDimensions.y);
+					_depthMaterialSmall.SetFloat("_depthHeight", (float)outputDimensions.x);
+					_depthMaterialSmall.SetInt("_Orientation", (int)m_CurrentScreenOrientation);
+					_depthMaterialSmall.SetMatrix("camIntrinsicsInverse", camInv);
+					_depthMaterialSmall.SetMatrix("localToWorld", theMatrix);
 					//RenderTexture.active = _renderTargetDepthV;
 					//commandBuffer.SetRenderTarget(_renderTargetDepthV);
 					Graphics.SetRenderTarget(_renderTargetDepthVSmall.colorBuffer, _renderTargetDepthVSmall.depthBuffer);
 					commandBuffer.ClearRenderTarget(false, true, Color.black);
 					//shouldn't pass envDepth here... if we don't set use_cpu_depth...
-					commandBuffer.Blit(_ourDepthH, /*_renderTargetDepthV*/UnityEngine.Rendering.BuiltinRenderTextureType.CurrentActive, m_DepthMaterial);
+					commandBuffer.Blit(_ourDepthH, /*_renderTargetDepthV*/UnityEngine.Rendering.BuiltinRenderTextureType.CurrentActive, _depthMaterialSmall);
 					//commandBuffer.Blit(envDepth, /*_renderTargetDepthV*/UnityEngine.Rendering.BuiltinRenderTextureType.CurrentActive, m_DepthMaterial);
 					Graphics.ExecuteCommandBuffer(commandBuffer);
-					
+
+					_ourDepthVSmall.ReadPixels(new UnityEngine.Rect(0, 0, _ourDepthVSmall.width, _ourDepthVSmall.height), 0, 0, false);
+					_ourDepthVSmall.Apply();
+#if WRITE_BMP
+					if(_currentMode == AppMode.eHAIL && _bIsCapturing && !_bDoneCapturing)
+					{
+						//do the calculation in the shader...
+						byte[] depthT = _ourDepthVSmall.GetRawTextureData();
+						RawBitmap rb = new RawBitmap(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW);
+
+						for(int i = 0; i < DEPTH_HEIGHT_RAW; ++i)
+						{
+							for(int j = 0; j < DEPTH_WIDTH_RAW; ++j)
+							{
+								int dIdx = (i * DEPTH_WIDTH_RAW * 4) + (j * 4);
+								RawColor rc = new RawColor(depthT[dIdx], depthT[dIdx+1], depthT[dIdx+2], depthT[dIdx+3]);
+								rb.SetPixel(i, j, rc);
+							}
+						}
+						
+						string bName = _opticalFlowWriteCount.ToString("D4")+"_depth.bmp";
+						rb.Save(System.IO.Path.Combine(_currPath, bName));
+
+						_depthMaterialLocalPC.SetTexture("_MainTex", _ourDepthH);
+						//m_DepthMaterial.SetBuffer("_depthBuffer", _depthBuffer);
+						_depthMaterialLocalPC.SetFloat("_depthWidth", (float)outputDimensions.y);
+						_depthMaterialLocalPC.SetFloat("_depthHeight", (float)outputDimensions.x);
+						_depthMaterialLocalPC.SetInt("_Orientation", (int)m_CurrentScreenOrientation);
+						_depthMaterialLocalPC.SetMatrix("camIntrinsicsInverse", camInv);
+						_depthMaterialLocalPC.SetMatrix("localToWorld", theMatrix);
+
+						Graphics.SetRenderTarget(_renderTargetDepthVSmall.colorBuffer, _renderTargetDepthVSmall.depthBuffer);
+						commandBuffer.ClearRenderTarget(false, true, Color.black);
+						//shouldn't pass envDepth here... if we don't set use_cpu_depth...
+						commandBuffer.Blit(_ourDepthH, UnityEngine.Rendering.BuiltinRenderTextureType.CurrentActive, _depthMaterialLocalPC);
+						Graphics.ExecuteCommandBuffer(commandBuffer);
+
+						_ourDepthVSmall.ReadPixels(new UnityEngine.Rect(0, 0, _ourDepthVSmall.width, _ourDepthVSmall.height), 0, 0, false);
+						_ourDepthVSmall.Apply();
+						
+					    depthT = _ourDepthVSmall.GetRawTextureData();
+						RawBitmap rb2 = new RawBitmap(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW);
+
+						for(int i = 0; i < DEPTH_HEIGHT_RAW; ++i)
+						{
+							for(int j = 0; j < DEPTH_WIDTH_RAW; ++j)
+							{
+								int dIdx = (i * DEPTH_WIDTH_RAW * 4) + (j * 4);
+								RawColor rc = new RawColor(depthT[dIdx], depthT[dIdx+1], depthT[dIdx+2], depthT[dIdx+3]);
+								rb.SetPixel(i, j, rc);
+							}
+						}
+						
+						bName = _opticalFlowWriteCount.ToString("D4")+"_localPC.bmp";
+						rb.Save(System.IO.Path.Combine(_currPath, bName));
+
+					}
+					//File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), depthT);
+#endif
+						
 				}
 
 				Texture2D envDepth = m_OcclusionManager.environmentDepthTexture;
@@ -1223,34 +1389,11 @@ using UnityEngine;
 						_ourDepthV.Apply();
 
 #if WRITE_FRAMES
+#if WRITE_BMP
+#else
 						byte[] depthT = _ourDepthV.GetRawTextureData();
 						File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), depthT);
-						
-						Matrix4x4 viewMatrix = Matrix4x4.TRS(_arCamera.transform.position, _arCamera.transform.rotation, Vector3.one).inverse;
-
-						if (!m_CameraManager.subsystem.TryGetIntrinsics(out XRCameraIntrinsics cameraIntrinsics))
-						{
-							SetLastValues();
-							return;
-						}
-						
-						Matrix4x4 camIntrinsics = Matrix4x4.identity;
-						camIntrinsics.SetColumn(0, new Vector4(cameraIntrinsics.focalLength.y, 0f, 0f, 0f));
-						camIntrinsics.SetColumn(1, new Vector4(0f, cameraIntrinsics.focalLength.x, 0f, 0f));
-						camIntrinsics.SetColumn(2, new Vector4(cameraIntrinsics.principalPoint.y, cameraIntrinsics.principalPoint.x, 1f, 0f));
-
-						Matrix4x4 camInv = camIntrinsics.inverse;
-
-						Matrix4x4 viewInverse = viewMatrix.inverse;
-						Matrix4x4 flipYZ = new Matrix4x4();
-						flipYZ.SetRow(0, new Vector4(1f,0f,0f,0f));
-						flipYZ.SetRow(1, new Vector4(0f,1f,0f,0f));
-						flipYZ.SetRow(2, new Vector4(0f,0f,-1f,0f));
-						flipYZ.SetRow(3, new Vector4(0f,0f,0f,1f));
-
-						Matrix4x4 theMatrix = viewInverse * flipYZ;
-						Matrix4x4 viewProj = _lastProjMatrix * viewMatrix;
-
+#endif
 						string depthString = theMatrix[0].ToString("F4") + " " + theMatrix[4].ToString("F4") + " " + theMatrix[8].ToString("F4") + " " + theMatrix[12].ToString("F4") + "\n";
 						depthString = depthString + (theMatrix[1].ToString("F4") + " " + theMatrix[5].ToString("F4") + " " + theMatrix[9].ToString("F4") + " " + theMatrix[13].ToString("F4") + "\n");
 						depthString = depthString + (theMatrix[2].ToString("F4") + " " + theMatrix[6].ToString("F4") + " " + theMatrix[10].ToString("F4") + " " + theMatrix[14].ToString("F4") + "\n");
@@ -1258,7 +1401,8 @@ using UnityEngine;
 						
 						string filenameTxt = _opticalFlowWriteCount.ToString("D4")+"_trans.txt";
 						System.IO.File.WriteAllText(System.IO.Path.Combine(_currPath, filenameTxt), depthString);	
-						
+#if WRITE_BMP
+#else
 						string depthString2 = camInv[0].ToString("F4") + " " + camInv[4].ToString("F4") + " " + camInv[8].ToString("F4") + " " + camInv[12].ToString("F4") + "\n";
 						depthString2 = depthString2 + (camInv[1].ToString("F4") + " " + camInv[5].ToString("F4") + " " + camInv[9].ToString("F4") + " " + camInv[13].ToString("F4") + "\n");
 						depthString2 = depthString2 + (camInv[2].ToString("F4") + " " + camInv[6].ToString("F4") + " " + camInv[10].ToString("F4") + " " + camInv[14].ToString("F4") + "\n");
@@ -1274,7 +1418,7 @@ using UnityEngine;
 						
 						string filenameTxt3 = _opticalFlowWriteCount.ToString("D4")+"_viewProj.txt";
 						System.IO.File.WriteAllText(System.IO.Path.Combine(_currPath, filenameTxt3), depthString3);
-
+#endif
 						//Debug.Log("Wrote data: " + _opticalFlowCount);
 #endif
 					} 
@@ -1306,10 +1450,13 @@ using UnityEngine;
 					if(_currentMode == AppMode.eHAIL && _bIsCapturing && !_bDoneCapturing)
 					{
 						//Debug.Log("OCCLUSION FRAME3");
+#if WRITE_BMP
+#else
 						string fName = _opticalFlowWriteCount.ToString("D4")+"conf.png";
 						_ourConfV.ReadPixels(new UnityEngine.Rect(0, 0, _ourConfV.width, _ourConfV.height), 0, 0, false);
 						_ourConfV.Apply();
 						File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), ImageConversion.EncodeArrayToPNG(_ourConfV.GetRawTextureData(), UnityEngine.Experimental.Rendering.GraphicsFormat.R8_UNorm, (uint)_ourConfV.width, (uint)_ourConfV.height));
+#endif
 						_nerfImageCount++;
 					}
 #endif			
@@ -1491,7 +1638,7 @@ using UnityEngine;
 						//Imgproc.cvtColor(_flowTempColor, _flowColor[_frameCount%FLOW_WINDOW_SIZE], Imgproc.COLOR_BGRA2GRAY);
 
 						//Debug.Log("CAMERA FRAME");
-						string fName = (_opticalFlowWriteCount).ToString("D4")+"color.png";
+						string fName = (_opticalFlowWriteCount).ToString("D4")+"_color.png";
 						File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), ImageConversion.EncodeArrayToPNG(_ourColorV.GetRawTextureData(), 
 							UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_UNorm, (uint)_ourColorV.width, (uint)_ourColorV.height));
 						
@@ -1504,7 +1651,8 @@ using UnityEngine;
 				else if((_currentMode == AppMode.eHAIL) && _bIsCapturing && !_bDoneCapturing)
 				{
 #if WRITE_FRAMES
-					string fName = _nerfImageCount.ToString("D4")+"color.png";
+					//string fName = _nerfImageCount.ToString("D4")+"_color.png";
+					string fName = _opticalFlowWriteCount.ToString("D4")+"_color.png";
 
 					_ourColorV.ReadPixels(new UnityEngine.Rect(0, 0, _ourColorV.width, _ourColorV.height), 0, 0, false);
 					_ourColorV.Apply();

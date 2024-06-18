@@ -56,6 +56,8 @@ public class QRCodeManager : MonoBehaviour
 	float _lastTime;
 	public string _headsetID;
 
+    [SerializeField]
+    SimpleCapture _capture;
   
     private void Start()
     {
@@ -146,10 +148,11 @@ public class QRCodeManager : MonoBehaviour
             //Destroy(cameraImageTexture);
 
             // Do something with the result
-            if (result != null) {
+            if (result != null) 
+            {
                 locFound = true;
                 string lastResult = result.Text;
-                //Debug.Log("lastResult: " + lastResult);
+                Debug.Log("lastResult: " + lastResult);
 
                 //Uri uri = new Uri(lastResult);
                 string path = lastResult;// uri.AbsolutePath;
@@ -158,11 +161,11 @@ public class QRCodeManager : MonoBehaviour
                 
                 if(segments.Length > 1)
                 {
-                    //Debug.Log("0: " + segments[0]);
-                    //Debug.Log("1: " + segments[1]);
-                    //Debug.Log("2: " + segments[2]);
-                    //Debug.Log("3: " + segments[3]);
-                    //Debug.Log("4: " + segments[4]);
+                    Debug.Log("0: " + segments[0]);
+                    Debug.Log("1: " + segments[1]);
+                    Debug.Log("2: " + segments[2]);
+                    Debug.Log("3: " + segments[3]);
+                    Debug.Log("4: " + segments[4]);
 
                     if (segments.Length > 2 && segments[3] == "locations")
                     {
@@ -171,7 +174,7 @@ public class QRCodeManager : MonoBehaviour
                         //Debug.Log("_locationID: " + _locationID);
                         buffer.Dispose();
                         image.Dispose(); 
-                        //Debug.Log("Base URL: " + "http://"+segments[2]);
+                        Debug.Log("Base URL: " + "http://"+segments[2]);
                         EasyVizARServer.Instance.SetBaseURL("http://" + segments[2] + "/");
                         CreateLocalHeadset();
                     }
@@ -180,6 +183,10 @@ public class QRCodeManager : MonoBehaviour
                         Debug.Log("Location component not found!");
                     }
                 }
+            }
+            else
+            {
+                //Debug.Log("Result null");
             }
         }
     }
@@ -308,10 +315,22 @@ public class QRCodeManager : MonoBehaviour
         isRecording = !isRecording;
         if(isRecording)
         {
+            /*if(_capture != null)
+            {
+                _capture.StartCapture(true);
+            }*/
+            Debug.Log("QR Detected: " + qrCodeDetected);
+            Debug.Log("Loc Found: " + locFound);
             Debug.Log("Writing to server...");
         }
         else
         {
+            /*if(_capture != null)
+            {
+                _capture.StartCapture(false);
+            }*/
+            Debug.Log("QR Detected: " + qrCodeDetected);
+            Debug.Log("Loc Found: " + locFound);
             Debug.Log("Not writing to server...");
         }
     }
@@ -510,6 +529,14 @@ public class QRCodeManager : MonoBehaviour
 	// We use a patch request with a HeadsetPositionUpdate structure. Periodically update the headset position and orientation on the server.
 	void PostPosition(Vector3 qrCodePosition, Quaternion qrCodeRotation) 
     {
+        if(_capture != null)
+        {
+            //Debug.Log("Capturing");
+            _capture._currentPosition = qrCodePosition;
+            _capture._currentRotation = qrCodeRotation;
+            _capture.StartCapture(true);
+        }
+
 		EasyVizAR.HeadsetPositionUpdate h = new EasyVizAR.HeadsetPositionUpdate();
 		h.position = new EasyVizAR.Position();
 		// h.position.x = arCamera.transform.position.x;
