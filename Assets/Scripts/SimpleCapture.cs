@@ -259,8 +259,8 @@ using UnityEngine;
 		const int DEPTH_WIDTH_SMALL = 512;
 		const int DEPTH_HEIGHT_SMALL = 384;
 
-		const int COLOR_WIDTH = 1920;
-		const int COLOR_HEIGHT = 1440;
+		const int COLOR_WIDTH = 256;//1920;
+		const int COLOR_HEIGHT = 192;//1440;
 
 		const uint TOTAL_CELLS = GRID_SIZE_X * GRID_SIZE_Y * GRID_SIZE_Z;
 
@@ -1282,8 +1282,8 @@ using UnityEngine;
 					_depthMaterialSmall.SetFloat("_depthWidth", (float)outputDimensions.y);
 					_depthMaterialSmall.SetFloat("_depthHeight", (float)outputDimensions.x);
 					_depthMaterialSmall.SetInt("_Orientation", (int)m_CurrentScreenOrientation);
-					_depthMaterialSmall.SetMatrix("camIntrinsicsInverse", camInv);
-					_depthMaterialSmall.SetMatrix("localToWorld", theMatrix);
+					_depthMaterialSmall.SetMatrix("_camIntrinsics", camInv);
+					_depthMaterialSmall.SetMatrix("_theMatrix", theMatrix);
 					//RenderTexture.active = _renderTargetDepthV;
 					//commandBuffer.SetRenderTarget(_renderTargetDepthV);
 					Graphics.SetRenderTarget(_renderTargetDepthVSmall.colorBuffer, _renderTargetDepthVSmall.depthBuffer);
@@ -1302,13 +1302,13 @@ using UnityEngine;
 						byte[] depthT = _ourDepthVSmall.GetRawTextureData();
 						RawBitmap rb = new RawBitmap(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW);
 
-						for(int i = 0; i < DEPTH_HEIGHT_RAW; ++i)
+						for(int i = 0; i < DEPTH_WIDTH_RAW; ++i)
 						{
-							for(int j = 0; j < DEPTH_WIDTH_RAW; ++j)
+							for(int j = 0; j < DEPTH_HEIGHT_RAW; ++j)
 							{
-								int dIdx = (i * DEPTH_WIDTH_RAW * 4) + (j * 4);
+								int dIdx = (i * DEPTH_HEIGHT_RAW * 4) + (j * 4);
 								RawColor rc = new RawColor(depthT[dIdx], depthT[dIdx+1], depthT[dIdx+2], depthT[dIdx+3]);
-								rb.SetPixel(i, j, rc);
+								rb.SetPixel(j, i, rc);
 							}
 						}
 						
@@ -1320,8 +1320,8 @@ using UnityEngine;
 						_depthMaterialLocalPC.SetFloat("_depthWidth", (float)outputDimensions.y);
 						_depthMaterialLocalPC.SetFloat("_depthHeight", (float)outputDimensions.x);
 						_depthMaterialLocalPC.SetInt("_Orientation", (int)m_CurrentScreenOrientation);
-						_depthMaterialLocalPC.SetMatrix("camIntrinsicsInverse", camInv);
-						_depthMaterialLocalPC.SetMatrix("localToWorld", theMatrix);
+						_depthMaterialLocalPC.SetMatrix("_camIntrinsics", camInv);
+						_depthMaterialLocalPC.SetMatrix("_theMatrix", theMatrix);
 
 						Graphics.SetRenderTarget(_renderTargetDepthVSmall.colorBuffer, _renderTargetDepthVSmall.depthBuffer);
 						commandBuffer.ClearRenderTarget(false, true, Color.black);
@@ -1335,21 +1335,20 @@ using UnityEngine;
 					    depthT = _ourDepthVSmall.GetRawTextureData();
 						RawBitmap rb2 = new RawBitmap(DEPTH_HEIGHT_RAW, DEPTH_WIDTH_RAW);
 
-						for(int i = 0; i < DEPTH_HEIGHT_RAW; ++i)
+						for(int i = 0; i < DEPTH_WIDTH_RAW; ++i)
 						{
-							for(int j = 0; j < DEPTH_WIDTH_RAW; ++j)
+							for(int j = 0; j < DEPTH_HEIGHT_RAW; ++j)
 							{
-								int dIdx = (i * DEPTH_WIDTH_RAW * 4) + (j * 4);
+								int dIdx = (i * DEPTH_HEIGHT_RAW * 4) + (j * 4);
 								RawColor rc = new RawColor(depthT[dIdx], depthT[dIdx+1], depthT[dIdx+2], depthT[dIdx+3]);
-								rb.SetPixel(i, j, rc);
+								rb2.SetPixel(j, i, rc);
 							}
 						}
 						
 						bName = _opticalFlowWriteCount.ToString("D4")+"_localPC.bmp";
-						rb.Save(System.IO.Path.Combine(_currPath, bName));
+						rb2.Save(System.IO.Path.Combine(_currPath, bName));
 
 					}
-					//File.WriteAllBytes(System.IO.Path.Combine(_currPath, fName), depthT);
 #endif
 						
 				}

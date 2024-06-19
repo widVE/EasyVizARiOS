@@ -33,7 +33,7 @@ public class RawBitmap
 
     public void SetPixel(int x, int y, RawColor color)
     {
-        int offset = ((Height - y - 1) * Width + x) * 4;
+        int offset = (y * Width * 4) + (x * 4);
         ImageBytes[offset + 0] = color.B;
         ImageBytes[offset + 1] = color.G;
         ImageBytes[offset + 2] = color.R;

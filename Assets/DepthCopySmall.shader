@@ -84,7 +84,7 @@ Shader "Unlit/CopyDepthShaderSmall"
             //this writes to _renderTargetDepthV
             float4 frag (v2f i) : SV_Target
             {
-                int idx = (int)((1.0-i.uv.x) * (_depthWidth) * (_depthHeight) + (1.0-i.uv.y) * (_depthHeight));
+                //int idx = (int)((1.0-i.uv.x) * (_depthWidth) * (_depthHeight) + (1.0-i.uv.y) * (_depthHeight));
 
                 float4 v = float4(i.uv.x*_depthWidth, i.uv.y*_depthHeight, 1.0, 0.0);
                 float d = tex2D(_MainTex, i.uv).r;
@@ -105,14 +105,14 @@ Shader "Unlit/CopyDepthShaderSmall"
                     fY = 8191.0;
                 }
 
-                float fZ = v.z * 1000.0;
+                //float fZ = v.z * 1000.0;
 
                 //v = mul(localToWorld, v);
                 //v = v / v.w;
 
                 uint u16X = (uint)fX;
                 uint u16Y = (uint)fY;
-                uint u16Z = (uint)fZ;
+                //uint u16Z = (uint)fZ;
                 
                 uint u8X = (u16X & 0x000000FF);
                 uint u8Y = (u16Y & 0x000000FF);
@@ -134,7 +134,7 @@ Shader "Unlit/CopyDepthShaderSmall"
                 return float4(0,0,0,1);
 #else*/
                 //return tex2D(_MainTex, i.uv).rrrr;//SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv).rrrr;
-                return float4(u8X, u8Y, u8Z, u8A);
+                return float4(u8X/255.0, u8Y/255.0, u8Z/255.0, u8A/255.0);
 //#endif
             }
             ENDHLSL
