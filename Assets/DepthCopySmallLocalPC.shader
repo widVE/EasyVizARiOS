@@ -89,7 +89,8 @@ Shader "Unlit/CopyDepthShaderSmallLocalPC"
                 float4 v = float4(i.uv.x*_depthWidth, i.uv.y*_depthHeight, 1.0, 0.0);
                 float d = tex2D(_MainTex, i.uv).r;
                 //d = d / 1000.0;
-                v = mul(_camIntrinsics, v) * d;
+                v = mul(_camIntrinsics, v);
+                v *= d;
                 v.w = 1.0;
 
                 //float fX = (v.x * 1000.0f) + 4095.0f;       //-2047->2047 to 0->4095 - 12 bits

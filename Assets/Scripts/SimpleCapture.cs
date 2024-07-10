@@ -1312,7 +1312,7 @@ using UnityEngine;
 							}
 						}
 						
-						string bName = _opticalFlowWriteCount.ToString("D4")+"_depth.bmp";
+						string bName = _opticalFlowWriteCount.ToString("D4")+"_localPC.bmp";
 						rb.Save(System.IO.Path.Combine(_currPath, bName));
 
 						_depthMaterialLocalPC.SetTexture("_MainTex", _ourDepthH);
@@ -1345,7 +1345,7 @@ using UnityEngine;
 							}
 						}
 						
-						bName = _opticalFlowWriteCount.ToString("D4")+"_localPC.bmp";
+						bName = _opticalFlowWriteCount.ToString("D4")+"_depth.bmp";
 						rb2.Save(System.IO.Path.Combine(_currPath, bName));
 
 					}
